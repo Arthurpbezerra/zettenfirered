@@ -831,4 +831,8 @@ struct MapPosition
 extern struct SaveBlock1* gSaveBlock1Ptr;
 extern u8 gReservedSpritePaletteCount;
 
+// Follower port: LZ-compress pokemon OW gfx in ROM (see graphics_file_rules.mk).
+// Required for 386 species without blowing past 32 MB.
+#define OW_GFX_COMPRESS TRUE
+
 #endif // GUARD_GLOBAL_H

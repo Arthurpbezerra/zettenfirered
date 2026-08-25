@@ -179,10 +179,36 @@
 #define OBJ_EVENT_GFX_VAR_E  (OBJ_EVENT_GFX_VARS + 0xE)
 #define OBJ_EVENT_GFX_VAR_F  (OBJ_EVENT_GFX_VARS + 0xF) // 255
 
+// --- Follower system (aarant/followers-expanded-id port) ---
+// Vanilla gfx ids stop at 255; pokemon OW sprites use u16 ids starting at 0x200.
+// Low 11 bits = species (+ shiny tag); high 5 bits = form (Castform, Unown, etc.).
+#define OBJ_EVENT_GFX_MON_BASE         0x200
+#define OBJ_EVENT_GFX_SPECIES_BITS     11
+#define OBJ_EVENT_GFX_SPECIES_MASK     ((1 << OBJ_EVENT_GFX_SPECIES_BITS) - 1)
+
+#define OBJ_EVENT_GFX_SPECIES(name)       (SPECIES_##name + OBJ_EVENT_GFX_MON_BASE)
+#define OBJ_EVENT_GFX_SPECIES_SHINY(name) (SPECIES_##name + OBJ_EVENT_GFX_MON_BASE + SPECIES_SHINY_TAG)
+
+#define OW_SPECIES(obj)  (((obj)->graphicsId & OBJ_EVENT_GFX_SPECIES_MASK) - OBJ_EVENT_GFX_MON_BASE)
+#define OW_FORM(obj)     ((obj)->graphicsId >> OBJ_EVENT_GFX_SPECIES_BITS)
+#define IS_OW_MON_OBJ(obj) ((obj)->graphicsId >= OBJ_EVENT_GFX_MON_BASE)
+
+// MVP toggles — ajuste aqui antes de recompilar
+#define OW_MON_BOBBING           FALSE // y2 toggle parece pulo no sprite 32x32 do FRLG
+#define OW_MON_WANDER_WALK       FALSE // walk-in-place parado parece pulo; so anima ao andar
+#define LARGE_OW_SUPPORT         TRUE  // 48x48 / 64x64 under bridges
+#define OW_MON_POKEBALLS         FALSE // FALSE = sem sprites de ball custom (economiza ROM)
+#define OW_MON_SCRIPT_MOVEMENT   TRUE  // follower segue movimento scripted do jogador
+#define OW_MON_OUTDOORS_ONLY     TRUE  // follower so em MAP_TYPE_TOWN / MAP_TYPE_ROUTE (nao em casas, lojas, etc.)
+#define OW_MON_ALLOWED_SPECIES   (0)   // 0 = qualquer especie; ou SPECIES_PIKACHU, VAR_TEMP_x, etc.
+#define OW_MON_ALLOWED_MET_LVL   (0)
+#define OW_MON_ALLOWED_MET_LOC   (0)
+
 #define SHADOW_SIZE_S   0
 #define SHADOW_SIZE_M   1
 #define SHADOW_SIZE_L   2
 #define SHADOW_SIZE_XL  3
+#define SHADOW_SIZE_NONE 3  // XL repurposed: follower mons sem sombra propria
 
 #define F_INANIMATE                        (1 << 6)
 #define F_DISABLE_REFLECTION_PALETTE_LOAD  (1 << 7)
@@ -190,6 +216,9 @@
 #define TRACKS_NONE       0
 #define TRACKS_FOOT       1
 #define TRACKS_BIKE_TIRE  2
+#define TRACKS_SLITHER    3  // follower: serpentes, tentaculos, etc.
+#define TRACKS_SPOT       4  // follower: pegadas pontuais
+#define TRACKS_BUG        5  // follower: insetos
 
 #define OBJ_KIND_NORMAL 0
 #define OBJ_KIND_CLONE  255
@@ -202,10 +231,12 @@
 #define LOCALID_NONE                         0
 #define LOCALID_CAMERA                     127
 #define LOCALID_BERRY_BLENDER_PLAYER_END   240 // This will use 5 (MAX_RFU_PLAYERS) IDs ending at 240, i.e. 236-240
+#define LOCALID_FOLLOWING_POKEMON          254 // party lead follower (SpawnSpecialObjectEvent)
 #define LOCALID_PLAYER                     255
 
 // Aliases for old names. "object event id" normally refers to an index into gObjectEvents, which these are not.
-#define OBJ_EVENT_ID_CAMERA LOCALID_CAMERA
-#define OBJ_EVENT_ID_PLAYER LOCALID_PLAYER
+#define OBJ_EVENT_ID_CAMERA   LOCALID_CAMERA
+#define OBJ_EVENT_ID_PLAYER   LOCALID_PLAYER
+#define OBJ_EVENT_ID_FOLLOWER LOCALID_FOLLOWING_POKEMON
 
 #endif // GUARD_CONSTANTS_EVENT_OBJECTS_H

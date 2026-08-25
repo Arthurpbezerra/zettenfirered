@@ -220,9 +220,7 @@ struct Sprite
              u16 coordOffsetEnabled:1;  //2
              u16 invisible:1;           //4
              u16 flags_3:1;             //8
-             u16 flags_4:1;             //0x10
-             u16 flags_5:1;             //0x20
-             u16 flags_6:1;             //0x40
+             u16 sheetSpan:3;
              u16 flags_7:1;             //0x80
     /*0x3F*/ u16 hFlip:1;               //1
              u16 vFlip:1;               //2
@@ -320,5 +318,7 @@ void ResetAffineAnimData(void);
 void FreeSpriteTilesIfNotUsingSheet(struct Sprite *sprite);
 s16 AllocSpriteTiles(u16 tileCount);
 void SetSpriteMatrixAnchor(struct Sprite* sprite, s16 xmod, s16 ymod);
+u16 LoadSpriteSheetByTemplate(const struct SpriteTemplate *template, u32 frame, s32 offset);
+u32 GetSpanPerImage(u32 shape, u32 size);
 
 #endif //GUARD_SPRITE_H

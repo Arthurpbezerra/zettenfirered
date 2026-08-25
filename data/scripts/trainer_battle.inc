@@ -98,8 +98,10 @@ EventScript_EndQuestLogRematch::
 	end
 
 EventScript_RevealTrainer::
+	setflag FLAG_SAFE_FOLLOWER_MOVEMENT
 	applymovement VAR_LAST_TALKED, Movement_RevealTrainer
 	waitmovement 0
+	clearflag FLAG_SAFE_FOLLOWER_MOVEMENT
 	return
 
 Movement_RevealTrainer::

@@ -7,6 +7,9 @@
 
 extern u8 gDecompressionBuffer[0x4000];
 
+u32 IsLZ77Data(const void *ptr, u32 minSize, u32 maxSize);
+u16 LoadCompressedSpriteSheetByTemplate(const struct SpriteTemplate *template, s32 offset);
+
 void LZDecompressWram(const void *src, void *dest);
 void LZDecompressVram(const void *src, void *dest);
 

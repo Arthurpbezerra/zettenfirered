@@ -422,6 +422,9 @@
 
 #define NUM_SPECIES SPECIES_EGG
 
+// Overworld follower shiny encoding (see OBJ_EVENT_GFX_SPECIES_SHINY in event_objects.h)
+#define SPECIES_SHINY_TAG 500
+
 #define SPECIES_UNOWN_B (NUM_SPECIES + 1)
 #define SPECIES_UNOWN_C (NUM_SPECIES + 2)
 #define SPECIES_UNOWN_D (NUM_SPECIES + 3)

@@ -37,6 +37,7 @@
 #include "constants/event_objects.h"
 #include "constants/maps.h"
 #include "constants/sound.h"
+#include "constants/event_object_movement.h"
 #include "sloopsvc.h"
 
 extern u16 (*const gSpecials[])(void);
@@ -85,6 +86,7 @@ bool8 ScrCmd_nop1(struct ScriptContext * ctx)
 
 bool8 ScrCmd_end(struct ScriptContext * ctx)
 {
+    FlagClear(FLAG_SAFE_FOLLOWER_MOVEMENT);
     StopScript(ctx);
     return FALSE;
 }
@@ -261,6 +263,7 @@ bool8 ScrCmd_returnram(struct ScriptContext * ctx)
 
 bool8 ScrCmd_endram(struct ScriptContext * ctx)
 {
+    FlagClear(FLAG_SAFE_FOLLOWER_MOVEMENT);
     ClearRamScript();
     StopScript(ctx);
     return TRUE;
@@ -1004,7 +1007,16 @@ bool8 ScrCmd_applymovementat(struct ScriptContext * ctx)
 
 static bool8 WaitForMovementFinish(void)
 {
-    return ScriptMovement_IsObjectMovementFinished(sMovingNpcId, sMovingNpcMapNum, sMovingNpcMapGroup);
+    if (ScriptMovement_IsObjectMovementFinished(sMovingNpcId, sMovingNpcMapNum, sMovingNpcMapGroup))
+    {
+        struct ObjectEvent *objEvent = GetFollowerObject();
+        if (sMovingNpcId != OBJ_EVENT_ID_FOLLOWER
+            && objEvent
+            && ObjectEventGetHeldMovementActionId(objEvent) == MOVEMENT_ACTION_ENTER_POKEBALL)
+            return ScriptMovement_IsObjectMovementFinished(objEvent->localId, objEvent->mapNum, objEvent->mapGroup);
+        return TRUE;
+    }
+    return FALSE;
 }
 
 bool8 ScrCmd_waitmovement(struct ScriptContext * ctx)
@@ -1200,8 +1212,11 @@ bool8 ScrCmd_lockall(struct ScriptContext * ctx)
     }
     else
     {
+        struct ObjectEvent *followerObj = GetFollowerObject();
         FreezeObjects_WaitForPlayer();
         SetupNativeScript(ctx, IsFreezePlayerFinished);
+        if (FlagGet(FLAG_SAFE_FOLLOWER_MOVEMENT) && followerObj)
+            UnfreezeObjectEvent(followerObj);
         return TRUE;
     }
 }
@@ -1214,16 +1229,21 @@ bool8 ScrCmd_lock(struct ScriptContext * ctx)
     }
     else
     {
+        struct ObjectEvent *followerObj = GetFollowerObject();
         if (gObjectEvents[gSelectedObjectEvent].active)
         {
             FreezeObjects_WaitForPlayerAndSelected();
             SetupNativeScript(ctx, IsFreezeSelectedObjectAndPlayerFinished);
+            if (gObjectEvents[gSelectedObjectEvent].localId == OBJ_EVENT_ID_FOLLOWER)
+                followerObj = NULL;
         }
         else
         {
             FreezeObjects_WaitForPlayer();
             SetupNativeScript(ctx, IsFreezePlayerFinished);
         }
+        if (followerObj)
+            UnfreezeObjectEvent(followerObj);
         return TRUE;
     }
 }
@@ -1231,18 +1251,27 @@ bool8 ScrCmd_lock(struct ScriptContext * ctx)
 bool8 ScrCmd_releaseall(struct ScriptContext * ctx)
 {
     u8 playerObjectId;
+    struct ObjectEvent *followerObject = GetFollowerObject();
+
+    if (followerObject && gSprites[followerObject->spriteId].data[1] == 0)
+        ClearObjectEventMovement(followerObject, &gSprites[followerObject->spriteId]);
 
     HideFieldMessageBox();
     playerObjectId = GetObjectEventIdByLocalIdAndMap(LOCALID_PLAYER, 0, 0);
     ObjectEventClearHeldMovementIfFinished(&gObjectEvents[playerObjectId]);
     ScriptMovement_UnfreezeObjectEvents();
     UnfreezeObjectEvents();
+    UpdateFollowingPokemon();
     return FALSE;
 }
 
 bool8 ScrCmd_release(struct ScriptContext * ctx)
 {
     u8 playerObjectId;
+    struct ObjectEvent *followerObject = GetFollowerObject();
+
+    if (followerObject && gSprites[followerObject->spriteId].data[1] == 0)
+        ClearObjectEventMovement(followerObject, &gSprites[followerObject->spriteId]);
 
     HideFieldMessageBox();
     if (gObjectEvents[gSelectedObjectEvent].active)
@@ -1251,6 +1280,7 @@ bool8 ScrCmd_release(struct ScriptContext * ctx)
     ObjectEventClearHeldMovementIfFinished(&gObjectEvents[playerObjectId]);
     ScriptMovement_UnfreezeObjectEvents();
     UnfreezeObjectEvents();
+    UpdateFollowingPokemon();
     return FALSE;
 }
 

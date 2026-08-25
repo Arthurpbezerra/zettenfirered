@@ -239,8 +239,9 @@ struct ObjectEvent
              /*25*/ u32 disableJumpLandingGroundEffect:1;
              /*26*/ u32 fixedPriority:1;
              /*27*/ u32 hideReflection:1;
-    /*0x04*/        u8 spriteId;
-    /*0x05*/        u8 graphicsId;
+             /*28*/ u32 shiny:1; // follower: OW mon shininess
+             /*29*/ u32 padding:3;
+    /*0x04*/        u16 graphicsId; // 11 bits species; high 5 bits form (OBJ_EVENT_GFX_MON_BASE)
     /*0x06*/        u8 movementType;
     /*0x07*/        u8 trainerType;
     /*0x08*/        u8 localId;
@@ -251,10 +252,13 @@ struct ObjectEvent
     /*0x0C*/        struct Coords16 initialCoords;
     /*0x10*/        struct Coords16 currentCoords;
     /*0x14*/        struct Coords16 previousCoords;
-    /*0x18*/        u8 facingDirection:4;
-                    u8 movementDirection:4;
-                    u16 rangeX:4;
-                    u16 rangeY:4;
+    /*0x18*/        u16 facingDirection:4;
+                    u16 movementDirection:4;
+                    struct __attribute__((packed))
+                    {
+                        u16 rangeX:4;
+                        u16 rangeY:4;
+                    } range;
     /*0x1A*/        u8 fieldEffectSpriteId;
     /*0x1B*/        u8 warpArrowSpriteId;
     /*0x1C*/        u8 movementActionId;
@@ -264,6 +268,7 @@ struct ObjectEvent
     /*0x20*/        u8 previousMovementDirection;
     /*0x21*/        u8 directionSequenceIndex;
     /*0x22*/        u8 playerCopyableMovement;
+    /*0x23*/        u8 spriteId;
     /*size = 0x24*/
 };
 
@@ -278,7 +283,7 @@ struct ObjectEventGraphicsInfo
     /*0x0C*/ u8 paletteSlot:4;
              u8 shadowSize:2;
              u8 inanimate:1;
-             u8 disableReflectionPaletteLoad:1;
+             u8 compressed:1; // follower: LZ-compressed gfx in ROM (OW_GFX_COMPRESS)
     /*0x0D*/ u8 tracks;
     /*0x10*/ const struct OamData *oam;
     /*0x14*/ const struct SubspriteTable *subspriteTables;
@@ -306,6 +311,11 @@ enum {
 #define PLAYER_AVATAR_FLAG_CONTROLLABLE (1 << PLAYER_AVATAR_STATE_CONTROLLABLE)
 #define PLAYER_AVATAR_FLAG_FORCED       (1 << PLAYER_AVATAR_STATE_FORCED)
 #define PLAYER_AVATAR_FLAG_DASH         (1 << PLAYER_AVATAR_STATE_DASH)
+
+#define PLAYER_AVATAR_FLAG_BIKE         (PLAYER_AVATAR_FLAG_MACH_BIKE | PLAYER_AVATAR_FLAG_ACRO_BIKE)
+// follower: estados em que o mon da party fica invisivel
+#define FOLLOWER_INVISIBLE_FLAGS        (PLAYER_AVATAR_FLAG_SURFING | PLAYER_AVATAR_FLAG_UNDERWATER | \
+                                         PLAYER_AVATAR_FLAG_BIKE | PLAYER_AVATAR_FLAG_FORCED)
 
 enum {
     PLAYER_AVATAR_GFX_NORMAL,
