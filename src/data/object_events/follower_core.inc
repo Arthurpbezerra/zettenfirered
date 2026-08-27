@@ -319,6 +319,21 @@ void RemoveFollowingPokemon(void)
     RemoveObjectEvent(objectEvent);
 }
 
+void RestoreFollowerObjectEventGraphics(struct ObjectEvent *objectEvent)
+{
+    u16 species;
+    u8 form, shiny;
+
+    if (objectEvent == NULL || objectEvent->localId != OBJ_EVENT_ID_FOLLOWER)
+        return;
+
+    if (!GetFollowerInfo(&species, &form, &shiny))
+        return;
+
+    objectEvent->graphicsId = ((OBJ_EVENT_GFX_MON_BASE + species) & OBJ_EVENT_GFX_SPECIES_MASK) | (form << OBJ_EVENT_GFX_SPECIES_BITS);
+    objectEvent->shiny = shiny;
+}
+
 static bool32 IsFollowerVisible(void)
 {
     return IsFollowerAllowedOnMap()

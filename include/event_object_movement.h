@@ -111,6 +111,7 @@ u16 LoadSheetGraphicsInfo(const struct ObjectEventGraphicsInfo *info, u16 uuid, 
 #endif
 void UpdateFollowingPokemon(void);
 void RemoveFollowingPokemon(void);
+void RestoreFollowerObjectEventGraphics(struct ObjectEvent *objectEvent);
 struct ObjectEvent *GetFollowerObject(void);
 struct Pokemon *GetFirstLiveMon(void);
 void MovementType_FollowPlayer(struct Sprite *sprite);

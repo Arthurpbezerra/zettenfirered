@@ -14,6 +14,10 @@ const u16 gObjectEventPaletteNull11[16] = {};
 const u16 gObjectEventPaletteNull12[16] = {};
 const u16 gObjectEventPaletteNull13[16] = {};
 const u16 gObjectEventPaletteNull14[16] = {};
+// arthorios
+const u16 gObjectEventPic_Arthorios[] = INCBIN_U16("graphics/object_events/pics/people/arthorios.4bpp");
+const u16 gObjectEventPal_Arthorios[] = INCBIN_U16("graphics/object_events/pics/people/arthorios.gbapal");
+
 const u16 gObjectEventPic_RedNormal[] = INCBIN_U16("graphics/object_events/pics/people/red_normal.4bpp");
 const u16 gObjectEventPic_RedSurfRun[] = INCBIN_U16("graphics/object_events/pics/people/red_surf_run.4bpp");
 const u16 gObjectEventPic_GreenNormal[] = INCBIN_U16("graphics/object_events/pics/people/green_normal.4bpp");

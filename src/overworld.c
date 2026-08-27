@@ -1946,7 +1946,10 @@ static bool32 ReturnToFieldLocal(u8 *state)
         if (gFieldCallback == FieldCallback_FlyIntoMap)
             RemoveFollowingPokemon();
         else
+        {
+            RemoveFollowingPokemon();
             UpdateFollowingPokemon();
+        }
         SetCameraToTrackPlayer();
         (*state)++;
         break;

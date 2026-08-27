@@ -389,7 +389,62 @@ PalletTown_Movement_SignLadyMoveOutOfWayLeft::
 PalletTown_EventScript_FatMan::
 	msgbox PalletTown_Text_CanStoreItemsAndMonsInPC, MSGBOX_NPC
 	end
+PalletTown_EventScript_Arthorios::
+	lock
+	faceplayer
+	msgbox PalletTown_Text_ArthoriosGreeting, MSGBOX_NPC
+	msgbox PalletTown_Text_ArthoriosChoosePokemon, MSGBOX_NPC
+	special ChooseKantoSpeciesFromList
+	waitstate
+	goto_if_eq VAR_RESULT, 0x7F, PalletTown_EventScript_Arthorios_Cancel
+	copyvar VAR_TEMP_1, VAR_RESULT
+	bufferspeciesname STR_VAR_1, VAR_TEMP_1
+	msgbox PalletTown_Text_ArthoriosConfirmGive, MSGBOX_YESNO
+	goto_if_eq VAR_RESULT, NO, PalletTown_EventScript_Arthorios_Cancel
+	givemon VAR_TEMP_1, 1
+	goto_if_eq VAR_RESULT, 0, PalletTown_EventScript_Arthorios_ReceivedParty
+	goto_if_eq VAR_RESULT, 1, PalletTown_EventScript_Arthorios_ReceivedPC
+	goto_if_eq VAR_RESULT, 2, EventScript_NoMoreRoomForPokemon
+	release
+	end
 
+PalletTown_EventScript_Arthorios_Cancel::
+	release
+	end
+
+PalletTown_EventScript_Arthorios_ReceivedParty::
+	bufferspeciesname STR_VAR_1, VAR_TEMP_1
+	playfanfare MUS_LEVEL_UP
+	message PalletTown_Text_ArthoriosReceivedMon
+	waitmessage
+	waitfanfare
+	msgbox Text_GiveNicknameToThisMon, MSGBOX_YESNO
+	goto_if_eq VAR_RESULT, NO, PalletTown_EventScript_Arthorios_EndGiveMon
+	call EventScript_GetGiftMonPartySlot
+	call EventScript_ChangePokemonNickname
+	goto PalletTown_EventScript_Arthorios_EndGiveMon
+	end
+
+PalletTown_EventScript_Arthorios_ReceivedPC::
+	bufferspeciesname STR_VAR_1, VAR_TEMP_1
+	playfanfare MUS_LEVEL_UP
+	message PalletTown_Text_ArthoriosReceivedMon
+	waitmessage
+	waitfanfare
+	msgbox Text_GiveNicknameToThisMon, MSGBOX_YESNO
+	goto_if_eq VAR_RESULT, NO, PalletTown_EventScript_Arthorios_TransferredToPC
+	call EventScript_NameReceivedBoxMon
+	goto PalletTown_EventScript_Arthorios_TransferredToPC
+	end
+
+PalletTown_EventScript_Arthorios_TransferredToPC::
+	call EventScript_TransferredToPC
+	goto PalletTown_EventScript_Arthorios_EndGiveMon
+	end
+
+PalletTown_EventScript_Arthorios_EndGiveMon::
+	release
+	end
 PalletTown_EventScript_OaksLabSign::
 	lockall
 	famechecker FAMECHECKER_OAK, 0

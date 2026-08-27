@@ -484,6 +484,8 @@ static const u8 gInitialMovementTypeFacingDirections[MOVEMENT_TYPES_COUNT] = {
 #define OBJ_EVENT_PAL_TAG_RS_GROUDON                  0x1119
 #define OBJ_EVENT_PAL_TAG_RS_GROUDON_REFLECTION       0x111A
 #define OBJ_EVENT_PAL_TAG_RS_SUBMARINE_SHADOW         0x111B
+//arthorios
+#define OBJ_EVENT_PAL_TAG_ARTHORIOS                   0x111C
 #define OBJ_EVENT_PAL_TAG_DYNAMIC                     0x1124
 #define OBJ_EVENT_PAL_TAG_SUBSTITUTE                  0x7611
 #define OBJ_EVENT_PAL_TAG_NONE                        0x11FF
@@ -518,6 +520,7 @@ static const struct SpritePalette sObjectEventSpritePalettes[] = {
     {gObjectEventPal_PlayerReflection,        OBJ_EVENT_PAL_TAG_PLAYER_GREEN_REFLECTION},
     {gObjectEventPal_Meteorite,               OBJ_EVENT_PAL_TAG_METEORITE},
     {gObjectEventPal_SSAnne,                  OBJ_EVENT_PAL_TAG_SS_ANNE},
+    {gObjectEventPal_Arthorios,               OBJ_EVENT_PAL_TAG_ARTHORIOS},
     {gObjectEventPal_Seagallop,               OBJ_EVENT_PAL_TAG_SEAGALLOP},
     {NULL,                                    OBJ_EVENT_PAL_TAG_NONE},
 };
@@ -1379,7 +1382,17 @@ static u8 InitObjectEventStateFromTemplate(const struct ObjectEventTemplate *tem
     }
     objectEvent->active = TRUE;
     objectEvent->triggerGroundEffectsOnMove = TRUE;
-    objectEvent->graphicsId = template->graphicsId;
+    if (template->localId == OBJ_EVENT_ID_FOLLOWER)
+    {
+        u16 species;
+        u8 form, shiny;
+        if (GetFollowerInfo(&species, &form, &shiny))
+            objectEvent->graphicsId = ((OBJ_EVENT_GFX_MON_BASE + species) & OBJ_EVENT_GFX_SPECIES_MASK) | (form << OBJ_EVENT_GFX_SPECIES_BITS);
+        else
+            objectEvent->graphicsId = template->graphicsId;
+    }
+    else
+        objectEvent->graphicsId = template->graphicsId;
     objectEvent->movementType = template->objUnion.normal.movementType;
     objectEvent->localId = template->localId;
     objectEvent->mapNum = mapNum;
@@ -2004,6 +2017,8 @@ static void SpawnObjectEventOnReturnToField(u8 objectEventId, s16 x, s16 y)
     }
 
     objectEvent = &gObjectEvents[objectEventId];
+    if (objectEvent->localId == OBJ_EVENT_ID_FOLLOWER)
+        RestoreFollowerObjectEventGraphics(objectEvent);
     subspriteTables = NULL;
     graphicsInfo = GetObjectEventGraphicsInfo(objectEvent->graphicsId);
     CopyObjectGraphicsInfoToSpriteTemplate_WithMovementType(objectEvent->graphicsId, objectEvent->movementType, &spriteTemplate, &subspriteTables);

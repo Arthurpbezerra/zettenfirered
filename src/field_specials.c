@@ -41,6 +41,8 @@
 #include "constants/menu.h"
 #include "constants/event_objects.h"
 #include "constants/metatile_labels.h"
+#include "constants/pokedex.h"
+#include "pokemon.h"
 
 static EWRAM_DATA u8 sElevatorCurrentFloorWindowId = 0;
 static EWRAM_DATA u16 sElevatorScroll = 0;
@@ -63,6 +65,7 @@ static void Task_ElevatorShake(u8 taskId);
 static void AnimateElevatorWindowView(u16 nfloors, bool8 direction);
 static void Task_AnimateElevatorWindowView(u8 taskId);
 static void Task_CreateScriptListMenu(u8 taskId);
+static void Task_CreateKantoSpeciesListMenu(u8 taskId);
 static void CreateScriptListMenu(void);
 static void ScriptListMenuMoveCursorFunction(s32 nothing, bool8 is, struct ListMenu * used);
 static void Task_ListMenuHandleInput(u8 taskId);
@@ -1508,6 +1511,74 @@ static void Task_ListMenuRemoveScrollIndicatorArrowPair(u8 taskId)
     struct Task *task = &gTasks[taskId];
     if (task->data[0] != task->data[1])
         RemoveScrollIndicatorArrowPair(task->data[12]);
+}
+
+void ChooseKantoSpeciesFromList(void)
+{
+    u8 taskId;
+    struct Task *task;
+
+    if (QL_AvoidDisplay(QL_DestroyAbortedDisplay) == TRUE)
+        return;
+
+    taskId = CreateTask(Task_CreateKantoSpeciesListMenu, 8);
+    task = &gTasks[taskId];
+    task->data[0] = 7;
+    task->data[1] = KANTO_DEX_COUNT;
+    task->data[2] = 1;
+    task->data[3] = 1;
+    task->data[4] = 0;
+    task->data[5] = 12;
+    task->data[6] = 0;
+    task->data[15] = taskId;
+    task->data[7] = 0;
+    task->data[8] = 0;
+}
+
+static void Task_CreateKantoSpeciesListMenu(u8 taskId)
+{
+    struct WindowTemplate template;
+    u8 i;
+    s32 width;
+    s32 mwidth;
+    struct Task *task = &gTasks[taskId];
+    u8 windowId;
+    u16 dexNum;
+    u16 species;
+
+    LockPlayerFieldControls();
+    sListMenuLastScrollPosition = 0;
+    sListMenuItems = AllocZeroed(KANTO_DEX_COUNT * sizeof(struct ListMenuItem));
+
+    for (i = 0, dexNum = 1; dexNum <= KANTO_DEX_COUNT; i++, dexNum++)
+    {
+        species = NationalPokedexNumToSpecies(dexNum);
+        sListMenuItems[i].label = gSpeciesNames[species];
+        sListMenuItems[i].index = species;
+    }
+
+    CreateScriptListMenu();
+    mwidth = 0;
+    for (i = 0; i < KANTO_DEX_COUNT; i++)
+    {
+        width = GetStringWidth(FONT_NORMAL, sListMenuItems[i].label, 0);
+        if (width > mwidth)
+            mwidth = width;
+    }
+    task->data[4] = (mwidth + 9) / 8 + 1;
+    if (task->data[2] + task->data[4] > 29)
+        task->data[2] = 29 - task->data[4];
+    template = SetWindowTemplateFields(0, task->data[2], task->data[3], task->data[4], task->data[5], 15, 0x038);
+    task->data[13] = windowId = AddWindow(&template);
+    SetStdWindowBorderStyle(task->data[13], 0);
+    sFieldSpecialsListMenuTemplate.totalItems = task->data[1];
+    sFieldSpecialsListMenuTemplate.maxShowed = task->data[0];
+    sFieldSpecialsListMenuTemplate.windowId = task->data[13];
+    Task_CreateMenuRemoveScrollIndicatorArrowPair(taskId);
+    task->data[14] = ListMenuInit(&sFieldSpecialsListMenuTemplate, task->data[7], task->data[8]);
+    PutWindowTilemap(task->data[13]);
+    CopyWindowToVram(task->data[13], COPYWIN_FULL);
+    task->func = Task_ListMenuHandleInput;
 }
 
 void ForcePlayerToStartSurfing(void)

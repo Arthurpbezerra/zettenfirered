@@ -11,6 +11,7 @@
 #include "overworld.h"
 #include "quest_log.h"
 #include "sloopsvc.h"
+#include "event_object_movement.h"
 #include "constants/event_objects.h"
 
 #define SAVEBLOCK_MOVE_RANGE    128
@@ -186,7 +187,8 @@ void SaveObjectEvents(void)
     {
         u16 graphicsId = gObjectEvents[i].graphicsId;
         gSaveBlock1Ptr->objectEvents[i] = gObjectEvents[i];
-        gSaveBlock1Ptr->objectEvents[i].graphicsId = (graphicsId >> 8) | (graphicsId << 8);
+        if (graphicsId < OBJ_EVENT_GFX_MON_BASE)
+            gSaveBlock1Ptr->objectEvents[i].graphicsId = (graphicsId >> 8) | (graphicsId << 8);
         gSaveBlock1Ptr->objectEvents[i].spriteId = 127;
         if (gObjectEvents[i].localId == OBJ_EVENT_ID_FOLLOWER)
             gSaveBlock1Ptr->objectEvents[i].active = FALSE;
@@ -202,14 +204,20 @@ void LoadObjectEvents(void)
     {
         gObjectEvents[i] = gSaveBlock1Ptr->objectEvents[i];
         graphicsId = gObjectEvents[i].graphicsId;
-        gObjectEvents[i].graphicsId = (graphicsId >> 8) | (graphicsId << 8);
-        if (gObjectEvents[i].spriteId != 127)
-            gObjectEvents[i].graphicsId &= 0xFF;
+        if (graphicsId < OBJ_EVENT_GFX_MON_BASE)
+        {
+            gObjectEvents[i].graphicsId = (graphicsId >> 8) | (graphicsId << 8);
+            if (gObjectEvents[i].spriteId != 127)
+                gObjectEvents[i].graphicsId &= 0xFF;
+        }
         gObjectEvents[i].spriteId = 0;
-        if (gObjectEvents[i].localId == OBJ_EVENT_ID_FOLLOWER
-            && !gObjectEvents[i].active
-            && gObjectEvents[i].graphicsId >= OBJ_EVENT_GFX_MON_BASE)
-            gObjectEvents[i].active = TRUE;
+        if (gObjectEvents[i].localId == OBJ_EVENT_ID_FOLLOWER)
+        {
+            RestoreFollowerObjectEventGraphics(&gObjectEvents[i]);
+            if (!gObjectEvents[i].active
+                && gObjectEvents[i].graphicsId >= OBJ_EVENT_GFX_MON_BASE)
+                gObjectEvents[i].active = TRUE;
+        }
     }
 }
 
