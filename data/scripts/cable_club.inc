@@ -1752,3 +1752,69 @@ CableClub_Text_ExplainWirelessClub::
 CableClub_Text_HopeYouEnjoyWirelessSystem::
 	.string "I hope you enjoy the Wireless\n"
 	.string "Communication System.$"
+
+EventScript_PhoneTryBattle::
+	lockall
+	special HelpSystem_Disable
+	special Phone_SaveReturnWarp
+	setvar VAR_0x8004, USING_SINGLE_BATTLE
+	copyvar VAR_CABLE_CLUB_STATE, VAR_0x8004
+	setvar VAR_0x8007, 0
+	warp MAP_BATTLE_COLOSSEUM_2P, 6, 8
+	waitstate
+	end
+
+EventScript_PhoneTryTrade::
+	lockall
+	call CableClub_EventScript_CheckPartyTradeRequirements
+	goto_if_eq VAR_RESULT, FALSE, EventScript_PhoneTradeAbortQuiet
+	special HelpSystem_Disable
+	special Phone_SaveReturnWarp
+	setvar VAR_0x8004, USING_TRADE_CENTER
+	copyvar VAR_CABLE_CLUB_STATE, VAR_0x8004
+	setvar VAR_0x8007, 0
+	warp MAP_TRADE_CENTER, 5, 8
+	waitstate
+	end
+
+EventScript_PhoneClubLinkupFailed::
+	lockall
+	special Phone_WarpToReturnPoint
+	waitstate
+	special Phone_OnClubLinkupEnd
+	special HelpSystem_Enable
+	release
+	end
+
+EventScript_PhoneTradeAbortQuiet::
+	special Phone_OnClubLinkupEnd
+	special HelpSystem_Enable
+	release
+	end
+
+EventScript_PhoneTradeAbort::
+	special Phone_OnClubLinkupEnd
+	goto CableClub_EventScript_AbortLink
+	end
+
+EventScript_PhoneEnterColosseum::
+	special HealPlayerParty
+	special SavePlayerParty
+	special LoadPlayerBag
+	copyvar VAR_CABLE_CLUB_STATE, VAR_0x8004
+	setvar VAR_0x8007, 0
+	special SetCableClubWarp
+	warp MAP_BATTLE_COLOSSEUM_2P, 6, 8
+	special DoCableClubWarp
+	waitstate
+	end
+
+EventScript_PhoneEnterTradeCenter::
+	setvar VAR_0x8004, USING_TRADE_CENTER
+	copyvar VAR_CABLE_CLUB_STATE, VAR_0x8004
+	setvar VAR_0x8007, 0
+	special SetCableClubWarp
+	warp MAP_TRADE_CENTER, 5, 8
+	special DoCableClubWarp
+	waitstate
+	end

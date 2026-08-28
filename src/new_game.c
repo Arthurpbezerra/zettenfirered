@@ -25,6 +25,7 @@
 #include "mystery_gift.h"
 #include "renewable_hidden_items.h"
 #include "trainer_tower.h"
+#include "phone.h"
 #include "script.h"
 #include "berry_powder.h"
 #include "pokemon_jump.h"
@@ -149,6 +150,7 @@ void NewGameInitData(void)
     RunScriptImmediately(EventScript_ResetAllMapFlags);
     StringCopy(gSaveBlock1Ptr->rivalName, rivalName);
     ResetTrainerTowerResults();
+    Phone_InitSave();
 }
 
 static void ResetMiniGamesResults(void)

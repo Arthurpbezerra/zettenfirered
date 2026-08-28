@@ -392,8 +392,14 @@ PalletTown_EventScript_FatMan::
 PalletTown_EventScript_Arthorios::
 	lock
 	faceplayer
-	msgbox PalletTown_Text_ArthoriosGreeting, MSGBOX_NPC
-	msgbox PalletTown_Text_ArthoriosChoosePokemon, MSGBOX_NPC
+	msgbox PalletTown_Text_ArthoriosGreeting, MSGBOX_DEFAULT
+	goto_if_set FLAG_GOT_PHONE_GEAR, PalletTown_EventScript_Arthorios_ChooseMon
+	msgbox PalletTown_Text_ArthoriosGivePhone, MSGBOX_DEFAULT
+	giveitem ITEM_CONNECTOR
+	giveitem ITEM_TRAINER_AGENDA
+	setflag FLAG_GOT_PHONE_GEAR
+PalletTown_EventScript_Arthorios_ChooseMon::
+	msgbox PalletTown_Text_ArthoriosChoosePokemon, MSGBOX_DEFAULT
 	special ChooseKantoSpeciesFromList
 	waitstate
 	goto_if_eq VAR_RESULT, 0x7F, PalletTown_EventScript_Arthorios_Cancel

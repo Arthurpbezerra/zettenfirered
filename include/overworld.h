@@ -85,6 +85,7 @@ void Overworld_ChangeMusicToDefault(void);
 void Overworld_ChangeMusicTo(u16);
 
 bool32 IsUpdateLinkStateCBActive(void);
+void Overworld_InitCableClubAfterLinkup(void);
 
 void ClearLinkPlayerObjectEvents(void);
 const struct MapHeader *const Overworld_GetMapHeaderByGroupAndId(u16, u16);
@@ -124,6 +125,7 @@ void SetLastHealLocationWarp(u8 healLocaionId);
 void LoadMapFromCameraTransition(u8 mapGroup, u8 mapNum);
 void CB2_ReturnToFieldFromDiploma(void);
 void CB2_OverworldBasic(void);
+bool8 Overworld_IsFieldCB2Active(void);
 void CB2_NewGame(void);
 bool8 IsMapTypeOutdoors(u8 mapType);
 bool8 Overworld_MapTypeAllowsTeleportAndFly(u8 mapType);

@@ -453,4 +453,10 @@ gSpecials::
 	def_special LoopWingFlapSound
 	def_special CreateEnemyEventMon
 	def_special ChooseKantoSpeciesFromList
+	def_special GivePhoneKeyItems
+	def_special Phone_OnClubLinkupEnd
+	def_special TryPhoneClubLinkup
+	def_special Phone_SaveReturnWarp
+	def_special Phone_ShouldStartRoomLinkup
+	def_special Phone_WarpToReturnPoint
 gSpecialsEnd::

@@ -13,6 +13,7 @@
 #include "mystery_gift.h"
 #include "new_menu_helpers.h"
 #include "overworld.h"
+#include "phone.h"
 #include "quest_log.h"
 #include "script.h"
 #include "script_pokemon_util.h"
@@ -830,8 +831,21 @@ static void Task_EnterCableClubSeat(u8 taskId)
     switch (task->tState)
     {
     case 0:
-        ShowFieldMessage(CableClub_Text_PleaseWaitBCancel);
-        task->tState = 1;
+        // Field message tiles fight serial DMA and trash the map. Agenda club
+        // waits on the same READY keys without drawing a box.
+        if (Phone_IsClubSessionActive())
+        {
+            if (gFieldLinkPlayerCount < 2 || !gReceivedRemoteLinkPlayers)
+                break;
+            SetInCableClubSeat();
+            SetLocalLinkPlayerId(gSpecialVar_0x8005);
+            task->tState = 2;
+        }
+        else
+        {
+            ShowFieldMessage(CableClub_Text_PleaseWaitBCancel);
+            task->tState = 1;
+        }
         break;
     case 1:
         if (IsFieldMessageBoxHidden())
@@ -842,6 +856,20 @@ static void Task_EnterCableClubSeat(u8 taskId)
         }
         break;
     case 2:
+        if (Phone_IsClubSessionActive())
+        {
+            StartSendingKeysToLink();
+            gHeldKeyCodeToSend = LINK_KEY_CODE_READY;
+            if (!gReceivedRemoteLinkPlayers || GetLinkPlayerCount_2() < 2)
+                break;
+            if (gLinkPartnersHeldKeys[GetMultiplayerId() ^ 1] != LINK_KEY_CODE_READY)
+                break;
+            HideFieldMessageBox();
+            task->tState = 0;
+            SetStartedCableClubActivity();
+            SwitchTaskToFollowupFunc(taskId);
+            break;
+        }
         switch (GetCableClubPartnersReady())
         {
         case CABLE_SEAT_WAITING:
@@ -1009,8 +1037,17 @@ void Task_WaitForLinkPlayerConnection(u8 taskId)
 #endif
     {
         CloseLink();
-        SetMainCallback2(CB2_LinkError);
+        if (Phone_IsClubSessionActive())
+        {
+            SetSuppressLinkErrorMessage(TRUE);
+            SetMainCallback2(CB2_ReturnToFieldFromMultiplayer);
+        }
+        else
+        {
+            SetMainCallback2(CB2_LinkError);
+        }
         DestroyTask(taskId);
+        return;
     }
 
     if (gReceivedRemoteLinkPlayers)

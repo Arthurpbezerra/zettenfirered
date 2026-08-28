@@ -31,6 +31,7 @@
 #include "new_game.h"
 #include "new_menu_helpers.h"
 #include "overworld.h"
+#include "phone.h"
 #include "play_time.h"
 #include "quest_log.h"
 #include "quest_log_objects.h"
@@ -1395,6 +1396,9 @@ static void DoCB1_Overworld(u16 newKeys, u16 heldKeys)
 {
     struct FieldInput fieldInput;
 
+    Phone_TryStartPendingLinkup();
+    Phone_TryResumeLink();
+
     QL_TryRunActions();
     UpdatePlayerAvatarTransitionState();
     FieldClearPlayerInput(&fieldInput);
@@ -1485,6 +1489,11 @@ static void CB2_Overworld(void)
     OverworldBasic();
     if (fading)
         SetFieldVBlankCallback();
+}
+
+bool8 Overworld_IsFieldCB2Active(void)
+{
+    return gMain.callback2 == CB2_Overworld;
 }
 
 void SetMainCallback1(MainCallback cb)
@@ -1641,6 +1650,21 @@ void CB2_ReturnToFieldFromMultiplayer(void)
 {
     FieldClearVBlankHBlankCallbacks();
     StopMapMusic();
+
+    if (Phone_IsClubSessionActive())
+    {
+        SetSuppressLinkErrorMessage(TRUE);
+        CloseLink();
+        Phone_OnClubLinkupEnd();
+        SetMainCallback1(CB1_Overworld);
+        SetWarpDestinationToDynamicWarp(WARP_ID_DYNAMIC);
+        ScriptContext_Init();
+        UnlockPlayerFieldControls();
+        DoWarp();
+        SetMainCallback2(CB2_Overworld);
+        return;
+    }
+
     SetMainCallback1(CB1_UpdateLinkState);
     ResetAllMultiplayerState();
 
@@ -1942,6 +1966,15 @@ static bool32 ReturnToFieldLocal(u8 *state)
         InitOverworldBgs();
         QuestLog_InitPalettesBackup();
         ResumeMap(FALSE);
+        (*state)++;
+        break;
+    case 1:
+        (*state)++;
+        break;
+    case 2:
+        // OBJ 1D + tilesets must be ready before OW_GFX_COMPRESS sprites.
+        // Spawning first (vanilla order) leaves black blobs until a warp.
+        InitViewGraphics();
         ReloadObjectsAndRunReturnToFieldMapScript();
         if (gFieldCallback == FieldCallback_FlyIntoMap)
             RemoveFollowingPokemon();
@@ -1951,13 +1984,6 @@ static bool32 ReturnToFieldLocal(u8 *state)
             UpdateFollowingPokemon();
         }
         SetCameraToTrackPlayer();
-        (*state)++;
-        break;
-    case 1:
-        (*state)++;
-        break;
-    case 2:
-        InitViewGraphics();
         SetHelpContextForMap();
         (*state)++;
         break;
@@ -2612,6 +2638,22 @@ static void ResetAllMultiplayerState(void)
 {
     ResetAllLinkStates();
     SetKeyInterceptCallback(KeyInterCB_SelfIdle);
+}
+
+void Overworld_InitCableClubAfterLinkup(void)
+{
+    u8 count = GetSavedPlayerCount();
+
+    if (count < 2)
+        count = GetLinkPlayerCount_2();
+    if (count < 2)
+        count = 2;
+    gFieldLinkPlayerCount = count;
+    gLocalLinkPlayerId = GetMultiplayerId();
+    // Keep CB1_Overworld so the local avatar can walk to a chair. READY
+    // keys are sent from Task_EnterCableClubSeat, not CB1_UpdateLinkState.
+    StartSendingKeysToLink();
+    SetSuppressLinkErrorMessage(TRUE);
 }
 
 static void ClearAllPlayerKeys(void)

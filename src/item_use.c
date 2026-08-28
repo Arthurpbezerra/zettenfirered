@@ -21,7 +21,10 @@
 #include "event_object_lock.h"
 #include "metatile_behavior.h"
 #include "new_menu_helpers.h"
+#include "link.h"
 #include "overworld.h"
+#include "safari_zone.h"
+#include "phone.h"
 #include "party_menu.h"
 #include "quest_log.h"
 #include "region_map.h"
@@ -38,6 +41,8 @@
 #include "constants/moves.h"
 #include "constants/songs.h"
 #include "constants/field_weather.h"
+#include "constants/flags.h"
+#include "constants/quest_log.h"
 
 static EWRAM_DATA void (*sItemUseOnFieldCB)(u8 taskId) = NULL;
 
@@ -67,6 +72,8 @@ static void UseTownMapFromBag(void);
 static void Task_UseTownMapFromField(u8 taskId);
 static void UseFameCheckerFromBag(void);
 static void Task_UseFameCheckerFromField(u8 taskId);
+static void UseAgendaFromBag(void);
+static void Task_UseAgendaFromField(u8 taskId);
 static void Task_BattleUse_StatBooster_DelayAndPrint(u8 taskId);
 static void Task_BattleUse_StatBooster_WaitButton_ReturnToBattle(u8 taskId);
 
@@ -705,6 +712,72 @@ static void Task_UseFameCheckerFromField(u8 taskId)
         CleanupOverworldWindowsAndTilemaps();
         SetFieldCallback2ForItemUse();
         UseFameChecker(CB2_ReturnToField);
+        DestroyTask(taskId);
+    }
+}
+
+static const u8 sText_LinkConnectorOn[] = _("The CONNECTOR is now ON.\nSearching for TRAINERS…$");
+static const u8 sText_LinkConnectorOff[] = _("The CONNECTOR is now OFF.$");
+
+void FieldUseFunc_Connector(u8 taskId)
+{
+    const u8 *msg;
+
+    if (InUnionRoom() == TRUE || GetSafariZoneFlag() == TRUE)
+    {
+        PrintNotTheTimeToUseThat(taskId, gTasks[taskId].data[3]);
+        return;
+    }
+
+    ItemUse_SetQuestLogEvent(QL_EVENT_USED_ITEM, NULL, gSpecialVar_ItemId, 0xFFFF);
+    if (FlagGet(FLAG_SYS_CONNECTOR_ON))
+    {
+        FlagClear(FLAG_SYS_CONNECTOR_ON);
+        PlaySE(SE_PC_OFF);
+        msg = sText_LinkConnectorOff;
+    }
+    else
+    {
+        FlagSet(FLAG_SYS_CONNECTOR_ON);
+        PlaySE(SE_PC_ON);
+        msg = sText_LinkConnectorOn;
+    }
+    Phone_UpdateConnector();
+
+    if (gTasks[taskId].data[3] == 0)
+        DisplayItemMessageInBag(taskId, FONT_NORMAL, msg, Task_ReturnToBagFromContextMenu);
+    else
+        DisplayItemMessageOnField(taskId, FONT_NORMAL, msg, Task_ItemUse_CloseMessageBoxAndReturnToField);
+}
+
+void FieldUseFunc_Agenda(u8 taskId)
+{
+    ItemUse_SetQuestLogEvent(QL_EVENT_USED_ITEM, NULL, gSpecialVar_ItemId, 0xFFFF);
+    if (gTasks[taskId].data[3] == 0)
+    {
+        ItemMenu_SetExitCallback(UseAgendaFromBag);
+        ItemMenu_StartFadeToExitCallback(taskId);
+    }
+    else
+    {
+        StopPokemonLeagueLightingEffectTask();
+        FadeScreen(FADE_TO_BLACK, 0);
+        gTasks[taskId].func = Task_UseAgendaFromField;
+    }
+}
+
+static void UseAgendaFromBag(void)
+{
+    ShowPhoneAgenda(CB2_BagMenuFromStartMenu);
+}
+
+static void Task_UseAgendaFromField(u8 taskId)
+{
+    if (!gPaletteFade.active)
+    {
+        CleanupOverworldWindowsAndTilemaps();
+        SetFieldCallback2ForItemUse();
+        ShowPhoneAgenda(CB2_ReturnToField);
         DestroyTask(taskId);
     }
 }

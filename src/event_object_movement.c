@@ -2046,6 +2046,13 @@ static void SpawnObjectEventOnReturnToField(u8 objectEventId, s16 x, s16 y)
         sprite->x += 8;
         sprite->y += 16 + sprite->centerToCornerVecY;
         sprite->images = graphicsInfo->images;
+        if (graphicsInfo->paletteTag != OBJ_EVENT_PAL_TAG_DYNAMIC
+         && graphicsInfo->paletteTag != OBJ_EVENT_PAL_TAG_SUBSTITUTE)
+            sprite->oam.paletteNum = graphicsInfo->paletteSlot;
+        if (graphicsInfo->paletteSlot == PALSLOT_PLAYER)
+            LoadPlayerObjectReflectionPalette(graphicsInfo->paletteTag, graphicsInfo->paletteSlot);
+        else if (graphicsInfo->paletteSlot == PALSLOT_NPC_SPECIAL)
+            LoadSpecialObjectReflectionPalette(graphicsInfo->paletteTag, graphicsInfo->paletteSlot);
         if (objectEvent->movementType == MOVEMENT_TYPE_PLAYER)
         {
             SetPlayerAvatarObjectEventIdAndObjectId(objectEventId, i);

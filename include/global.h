@@ -324,6 +324,30 @@ struct BattleTowerData // Leftover from R/S
     /*0x04D1, 0x0581*/ u8 filler_4D1[0x317];
 }; /* size = 0x7E8 */
 
+#define PHONE_MAX_CONTACTS 20
+#define PHONE_SAVE_MAGIC   0x50484E31 // "PHN1"
+#define PHONE_CONTACT_DUMMY 0x1
+
+struct PhoneContact
+{
+    u8 name[PLAYER_NAME_LENGTH + 1];
+    u32 trainerId;
+    u8 gender;
+    u8 flags;
+    u8 padding[2];
+}; /* size = 16 */
+
+struct PhoneSaveData
+{
+    u32 magic;
+    struct PhoneContact contacts[PHONE_MAX_CONTACTS];
+    u8 dummySeeded;
+    u8 unused[0x2BB];
+}; /* size = 0x400 */
+
+STATIC_ASSERT(sizeof(struct PhoneContact) == 16, PhoneContactSize);
+STATIC_ASSERT(sizeof(struct PhoneSaveData) == 0x400, PhoneSaveDataSize);
+
 struct SaveBlock2
 {
     /*0x000*/ u8 playerName[PLAYER_NAME_LENGTH + 1];
@@ -354,7 +378,7 @@ struct SaveBlock2
     /*0xAF0*/ struct BerryCrush berryCrush;
     /*0xB00*/ struct PokemonJumpRecords pokeJump;
     /*0xB10*/ struct BerryPickingResults berryPick;
-    /*0xB20*/ u8 filler_B20[0x400];
+    /*0xB20*/ struct PhoneSaveData phone;
     /*0xF20*/ u32 encryptionKey;
 }; // size: 0xF24
 

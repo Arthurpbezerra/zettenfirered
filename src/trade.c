@@ -12,6 +12,7 @@
 #include "strings.h"
 #include "menu.h"
 #include "overworld.h"
+#include "phone.h"
 #include "battle_anim.h"
 #include "party_menu.h"
 #include "daycare.h"
@@ -867,6 +868,8 @@ static void CB2_CreateTradeMenu(void)
             else
             {
                 OpenLink();
+                if (Phone_IsClubSessionActive())
+                    SetSuppressLinkErrorMessage(TRUE);
                 gMain.state++;
             }
             if (gWirelessCommType == 0)
@@ -1319,7 +1322,10 @@ static void CB_WaitToStartTrade(void)
 
 static void CB_StartLinkTrade(void)
 {
-    gMain.savedCallback = CB2_StartCreateTradeMenu;
+    if (Phone_IsClubSessionActive())
+        gMain.savedCallback = CB2_ReturnToFieldFromMultiplayer;
+    else
+        gMain.savedCallback = CB2_StartCreateTradeMenu;
     if (gWirelessCommType != 0)
     {
         // Wireless Link Trade

@@ -69,6 +69,10 @@ PalletTown_Text_ArthoriosGreeting::
     .string "Eae seu noob, sou o Arthorios.\p"
     .string "Bem vindo a cidade, sua jornada começa aqui!$"
 
+PalletTown_Text_ArthoriosGivePhone::
+    .string "Toma esse CONECTOR e a AGENDA.\n"
+    .string "Liga o CONECTOR e abre a AGENDA.$"
+
 PalletTown_Text_ArthoriosChoosePokemon::
     .string "Escolhe qualquer pokemon,tenho \n"
     .string "TODOS KKK, mas vai ser Lv. 1, confia!$"

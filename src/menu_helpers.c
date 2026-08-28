@@ -113,6 +113,8 @@ bool8 IsWritingMailAllowed(u16 itemId)
 
 bool8 MenuHelpers_IsLinkActive(void)
 {
+    if (gLinkType == LINKTYPE_PHONE)
+        return FALSE;
     if (IsUpdateLinkStateCBActive() == TRUE || gReceivedRemoteLinkPlayers == 1)
         return TRUE;
     else
