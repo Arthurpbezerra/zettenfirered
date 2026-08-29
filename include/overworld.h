@@ -87,6 +87,8 @@ void Overworld_ChangeMusicTo(u16);
 bool32 IsUpdateLinkStateCBActive(void);
 void Overworld_InitCableClubAfterLinkup(void);
 
+void Overworld_UpdateCoopPartner(void);
+
 void ClearLinkPlayerObjectEvents(void);
 const struct MapHeader *const Overworld_GetMapHeaderByGroupAndId(u16, u16);
 void ObjectEventMoveDestCoords(struct ObjectEvent *, u32, s16 *, s16 *);

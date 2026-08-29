@@ -32,6 +32,7 @@
 #include "new_menu_helpers.h"
 #include "overworld.h"
 #include "phone.h"
+#include "link_coop.h"
 #include "play_time.h"
 #include "quest_log.h"
 #include "quest_log_objects.h"
@@ -125,6 +126,8 @@ static u8 sPlayerLinkStates[MAX_LINK_PLAYERS];
 static KeyInterCB sPlayerKeyInterceptCallback;
 static bool8 sReceivingFromLink;
 static u8 sRfuKeepAliveTimer;
+static bool8 sCoopAvatarSpawned;
+static u8 sCoopAvatarId;
 
 static u8 CountBadgesForOverworldWhiteOutLossCalculation(void);
 static void Overworld_ResetStateAfterWhitingOut(void);
@@ -1398,6 +1401,7 @@ static void DoCB1_Overworld(u16 newKeys, u16 heldKeys)
 
     Phone_TryStartPendingLinkup();
     Phone_TryResumeLink();
+    Overworld_UpdateCoopPartner();
 
     QL_TryRunActions();
     UpdatePlayerAvatarTransitionState();
@@ -1654,7 +1658,6 @@ void CB2_ReturnToFieldFromMultiplayer(void)
     if (Phone_IsClubSessionActive())
     {
         SetSuppressLinkErrorMessage(TRUE);
-        CloseLink();
         Phone_OnClubLinkupEnd();
         SetMainCallback1(CB1_Overworld);
         SetWarpDestinationToDynamicWarp(WARP_ID_DYNAMIC);
@@ -2173,6 +2176,9 @@ static void InitObjectEventsLocal(void)
     gTotalCameraPixelOffsetX = 0;
     gTotalCameraPixelOffsetY = 0;
     ResetObjectEvents();
+    ClearLinkPlayerObjectEvents();
+    sCoopAvatarSpawned = FALSE;
+    sCoopAvatarId = 0;
     GetCameraFocusCoords(&x, &y);
     player = GetInitialPlayerAvatarState();
     InitPlayerAvatar(x, y, player->direction, gSaveBlock2Ptr->playerGender);
@@ -3610,5 +3616,103 @@ static void SpriteCB_LinkPlayer(struct Sprite *sprite)
     {
         sprite->invisible = ((sprite->data[7] & 4) >> 2);
         sprite->data[7]++;
+    }
+}
+
+static bool8 CoopCoordsInMap(s16 x, s16 y)
+{
+    s32 width;
+    s32 height;
+
+    if (gMapHeader.mapLayout == NULL)
+        return FALSE;
+    width = gMapHeader.mapLayout->width;
+    height = gMapHeader.mapLayout->height;
+    if (x < MAP_OFFSET || y < MAP_OFFSET)
+        return FALSE;
+    if (x >= MAP_OFFSET + width || y >= MAP_OFFSET + height)
+        return FALSE;
+    return TRUE;
+}
+
+static bool8 CoopLinkAvatarIsLive(u8 playerId)
+{
+    u8 objEventId;
+    struct ObjectEvent *objEvent;
+
+    if (playerId >= MAX_LINK_PLAYERS)
+        return FALSE;
+    if (!gLinkPlayerObjectEvents[playerId].active)
+        return FALSE;
+    objEventId = gLinkPlayerObjectEvents[playerId].objEventId;
+    if (objEventId >= OBJECT_EVENTS_COUNT)
+        return FALSE;
+    objEvent = &gObjectEvents[objEventId];
+    if (!objEvent->active)
+        return FALSE;
+    if (objEvent->spriteId >= MAX_SPRITES)
+        return FALSE;
+    if (gSprites[objEvent->spriteId].callback != SpriteCB_LinkPlayer)
+        return FALSE;
+    return TRUE;
+}
+
+static void CoopDiscardStaleAvatar(u8 playerId)
+{
+    if (CoopLinkAvatarIsLive(playerId))
+        DestroyLinkPlayerObject(playerId);
+    else if (playerId < MAX_LINK_PLAYERS)
+        ZeroLinkPlayerObjectEvent(&gLinkPlayerObjectEvents[playerId]);
+}
+
+void Overworld_UpdateCoopPartner(void)
+{
+    u8 playerId;
+    s16 x, y;
+    u8 dir;
+    u8 gender;
+
+    if (Phone_IsClubSessionActive())
+        return;
+
+    if (!LinkCoop_GetPeerPose(&playerId, &x, &y, &dir, &gender))
+    {
+        if (sCoopAvatarSpawned)
+        {
+            CoopDiscardStaleAvatar(sCoopAvatarId);
+            sCoopAvatarSpawned = FALSE;
+        }
+        return;
+    }
+
+    if (playerId >= MAX_LINK_PLAYERS)
+        return;
+    if (!CoopCoordsInMap(x, y))
+        return;
+    if (dir < DIR_SOUTH || dir > DIR_EAST)
+        dir = DIR_SOUTH;
+    if (gender > FEMALE)
+        gender = MALE;
+
+    if (sCoopAvatarSpawned && sCoopAvatarId != playerId)
+    {
+        CoopDiscardStaleAvatar(sCoopAvatarId);
+        sCoopAvatarSpawned = FALSE;
+    }
+
+    if (!CoopLinkAvatarIsLive(playerId))
+    {
+        ZeroLinkPlayerObjectEvent(&gLinkPlayerObjectEvents[playerId]);
+        SpawnLinkPlayerObjectEvent(playerId, x, y, gender);
+        CreateLinkPlayerSprite(playerId, VERSION_FIRE_RED);
+        sCoopAvatarId = playerId;
+        sCoopAvatarSpawned = TRUE;
+    }
+    else
+    {
+        InitLinkPlayerObjectEventPos(&gObjectEvents[gLinkPlayerObjectEvents[playerId].objEventId], x, y);
+        SetLinkPlayerObjectRange(playerId, dir);
+        sCoopAvatarId = playerId;
+        sCoopAvatarSpawned = TRUE;
     }
 }

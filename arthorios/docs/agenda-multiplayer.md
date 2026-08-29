@@ -1,10 +1,24 @@
 # Agenda + Conector — plano de entregas e testes
 
-Documento de planejamento do multiplayer local via dois key items.
-Foco de teste: **emulador** (mGBA cabo/netplay e RetroArch + gpSP).
-Hardware cabo GBA e Wireless Adapter entram como validação extra, não como pré-requisito.
+Documento de planejamento do multiplayer via dois key items (Agenda + Conector).
+Caminho alvo: **RetroArch 1.17+**, core **gpSP**, `Link Cable Connectivity = mul_poke`, netplay host/join.
+mGBA (duas janelas) serve para desenvolvimento local; RFU fica para a Fase G.
 
-Última atualização: 2026-08-27.
+Última atualização: 2026-08-28.
+
+---
+
+## Arquitetura atual (Fases A–E)
+
+O SIO tem um único dono: **`LinkSession`** (`src/link_session.c`). Nada fora desse módulo deve chamar `OpenLink`/`CloseLink`/`ResetSerial` enquanto a sessão está ativa. O estado vive em estático de módulo, não em `gTasks`, para sobreviver a `ResetTasks()`.
+
+Pacotes passam por **`LinkProto`** (`src/link_proto.c`): cabeçalho `{magic, protoVersion, channel, len, seq}`, canais `control` / `presence` / `coop` / `app`. Pacote inválido é descartado e contado em `LinkDiag`. ROM com versão diferente mostra *"Partner ROM is a different version."* na Agenda.
+
+Batalha e troca usam **barreira + handoff**: os dois lados confirmam no canal `control`, o serial **não** é fechado, `gLinkType` é ajustado e o motor vanilla do Cable Club assume o link. SELECT na Agenda abre o diagnóstico.
+
+**Co-op v1 (Pallet Town e Route 1):** canal `presence` troca mapa/coordenadas. Se os mapas coincidem, o avatar remoto aparece. Encontros selvagens e scripts de NPC/passo ficam desligados nessa fase. Sem janela de campo em BG0 com o serial aberto.
+
+Ainda pendente: Fase F (warp/encontros/scripts com autoridade do host) e Fase G (presente, chat, RFU).
 
 ---
 
@@ -17,9 +31,7 @@ Dois key items:
 | **Conector** | Liga/desliga “estou online” | Mochila ou **Select** (registrado, como bicicleta) |
 | **Agenda** | Lista contatos + pessoas online; batalha / troca / adicionar | Mochila (menu completo) |
 
-Após o primeiro contato bem-sucedido (ou “Adicionar”), o outro treinador fica salvo no save.
-
-Não é overworld compartilhado. É **descoberta + sessão de link** (batalha/troca) usando o engine vanilla, sem warp obrigatório à Union Room.
+Após o primeiro contato bem-sucedido o outro treinador fica salvo no save. Com o Conector ON a sessão persiste; batalha/troca não derrubam o cabo. Em Pallet Town / Route 1 o avatar remoto aparece (co-op v1).
 
 ---
 

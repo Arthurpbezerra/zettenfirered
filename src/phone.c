@@ -7,6 +7,10 @@
 #include "item.h"
 #include "item_menu.h"
 #include "link.h"
+#include "link_diag.h"
+#include "link_proto.h"
+#include "link_coop.h"
+#include "link_session.h"
 #include "list_menu.h"
 #include "menu.h"
 #include "new_menu_helpers.h"
@@ -53,6 +57,7 @@ enum {
     AGENDA_STATE_INCOMING,
     AGENDA_STATE_FLUSH_ACCEPT,
     AGENDA_STATE_DECLINED,
+    AGENDA_STATE_DIAG,
 };
 
 enum {
@@ -63,15 +68,14 @@ enum {
     PHONE_MSG_DECLINE = 4,
 };
 
-#define PHONE_MSG_MAGIC 0xA7E1
-
-struct PhoneLinkMsg
+struct PhoneAppMsg
 {
-    u16 magic;
     u8 kind;
-    u8 pad;
+    u8 pad[3];
     u32 trainerId;
 };
+
+STATIC_ASSERT(sizeof(struct PhoneAppMsg) <= LINK_PROTO_MAX_PAYLOAD, PhoneAppMsgFitsProto);
 
 enum {
     PHONE_PENDING_NONE,
@@ -87,6 +91,9 @@ enum {
     PHONE_ACTION_COUNT,
 };
 
+// One allocation owns every buffer the Agenda screen needs. The list items and
+// their label strings used to be permanently resident EWRAM statics even though
+// they are meaningless while the screen is closed.
 struct PhoneAgenda
 {
     MainCallback savedCallback;
@@ -95,17 +102,15 @@ struct PhoneAgenda
     u8 listTaskId;
     u8 numItems;
     u8 selectedSlot;
+    struct ListMenuItem items[PHONE_MAX_CONTACTS];
+    u8 labels[PHONE_MAX_CONTACTS][LABEL_WIDTH];
 };
 
 static EWRAM_DATA struct PhoneAgenda *sAgenda = NULL;
-static EWRAM_DATA struct ListMenuItem *sAgendaItems = NULL;
-static EWRAM_DATA u8 sAgendaLabels[PHONE_MAX_CONTACTS][LABEL_WIDTH] = {0};
 static EWRAM_DATA u32 sPhoneOnlineIds[MAX_LINK_PLAYERS] = {0};
 static EWRAM_DATA u8 sPhoneOnlineCount = 0;
 static EWRAM_DATA bool8 sPhoneLinkConnected = FALSE;
 static EWRAM_DATA u16 sAgendaSeenLink = 0xFFFF;
-static EWRAM_DATA s16 sStashedPhoneTask[4] = {0};
-static EWRAM_DATA bool8 sStashedPhoneTaskActive = FALSE;
 static EWRAM_DATA u8 sPendingPhoneActivity = 0;
 static EWRAM_DATA bool8 sPhoneClubBusy = FALSE;
 static EWRAM_DATA u8 sOutgoingKind = 0;
@@ -119,6 +124,8 @@ static void VBlankCB_PhoneAgenda(void);
 static void Task_PhoneAgenda(u8 taskId);
 static void Task_ClosePhoneAgenda(u8 taskId);
 static void Phone_SeedDummyContacts(void);
+static void Phone_CopyPeerName(u8 *dest, const u8 *src);
+static void Phone_ShowDiagnostics(void);
 static void Phone_DestroyList(void);
 static void Phone_BuildAgendaList(void);
 static void Phone_PrintHeader(void);
@@ -129,20 +136,14 @@ static void Phone_BeginActionMenu(u32 contactSlot);
 static void Phone_DestroyActionWindow(void);
 static void Phone_HandleActionMenu(u8 taskId);
 static void Phone_QueueClubActivity(u8 taskId, u8 kind);
-static void Phone_ShutdownDiscovery(void);
-static void Phone_TryClearStaleClubState(void);
 static void Phone_FieldCB_ReturnForLinkup(void);
-static void Task_PhoneLink(u8 taskId);
 static void Task_PhoneClubLinkup(u8 taskId);
 static void Phone_ClearOnlinePeers(void);
 static void Phone_SyncOnlinePeers(void);
-static bool8 Phone_ShouldKeepLink(void);
-static bool8 Phone_CanStartCable(void);
-static void Phone_StashLinkTask(void);
-static void Phone_RestoreLinkTask(void);
 static void Phone_RefreshAgendaIfNeeded(void);
 static u32 Phone_GetPlayerTrainerId(void);
 static bool8 Phone_TrySendMsg(u8 kind);
+static void Phone_OnAppPacket(u8 playerId, const u8 *payload, u8 len);
 static void Phone_PollLinkMsgs(void);
 static void Phone_BeginIncomingPrompt(void);
 static void Phone_HandleIncomingConfirm(u8 taskId);
@@ -152,12 +153,19 @@ static void Task_OpenAgendaIncoming(u8 taskId);
 static void Phone_TryOpenAgendaForIncoming(void);
 
 static const u8 sText_AgendaTitle[] = _("TRAINER AGENDA");
-static const u8 sText_FooterMain[] = _("A: ACTION  B: EXIT");
+static const u8 sText_FooterMain[] = _("A: ACTION  B: EXIT  SELECT: DIAG");
+static const u8 sText_FooterDiag[] = _("SELECT / B: BACK");
+static const u8 sText_DiagSessions[] = _("SESSION open/ok/lost");
+static const u8 sText_DiagPackets[] = _("PACKET sent/recv/fail");
+static const u8 sText_DiagRejected[] = _("REJECT magic/ver/kind");
+static const u8 sText_DiagErrors[] = _("ERROR hw/sum/queue/lag");
+static const u8 sText_DiagMisc[] = _("TIMEOUT/SANITIZED/PEAKQ");
 static const u8 sText_FooterConfirm[] = _("Remove this contact?");
 static const u8 sText_FooterActions[] = _("A: CHOOSE  B: BACK");
 static const u8 sText_FooterWaiting[] = _("WAITING  B: CANCEL");
 static const u8 sText_IncomingBattle[] = _("Battle request. Accept?");
 static const u8 sText_IncomingTrade[] = _("Trade request. Accept?");
+static const u8 sText_RomMismatch[] = _("Partner ROM is a different version.");
 static const u8 sText_RequestDeclined[] = _("The other TRAINER declined.");
 static const u8 sText_ActionBattle[] = _("BATTLE");
 static const u8 sText_ActionTrade[] = _("TRADE");
@@ -289,8 +297,18 @@ void Phone_InitSave(void)
 
 void Phone_EnsureReady(void)
 {
+    u32 i;
+
     if (gSaveBlock2Ptr->phone.magic != PHONE_SAVE_MAGIC)
         Phone_InitSave();
+    else
+    {
+        // A save written by an older build could hold an unterminated name.
+        for (i = 0; i < PHONE_MAX_CONTACTS; i++)
+            gSaveBlock2Ptr->phone.contacts[i].name[PLAYER_NAME_LENGTH] = EOS;
+    }
+
+    LinkProto_SetHandler(LINK_CHAN_APP, Phone_OnAppPacket);
 }
 
 static void Phone_SeedDummyContacts(void)
@@ -321,6 +339,21 @@ s32 Phone_FindByTrainerId(u32 trainerId)
     return -1;
 }
 
+// Contact names can originate from a peer over the link, where nothing
+// guarantees a terminator. An unbounded copy here writes past the 8-byte field
+// and into the rest of SaveBlock2.
+static void Phone_CopyPeerName(u8 *dest, const u8 *src)
+{
+    u32 i;
+
+    for (i = 0; i < PLAYER_NAME_LENGTH && src[i] != EOS; i++)
+        dest[i] = src[i];
+    dest[i] = EOS;
+
+    if (i == PLAYER_NAME_LENGTH && src[i] != EOS)
+        LinkDiag_Count(LINK_DIAG_PEER_SANITIZED);
+}
+
 bool8 Phone_AddContact(const u8 *name, u32 trainerId, u8 gender, u8 flags)
 {
     u32 i;
@@ -341,7 +374,7 @@ bool8 Phone_AddContact(const u8 *name, u32 trainerId, u8 gender, u8 flags)
     {
         if (gSaveBlock2Ptr->phone.contacts[i].trainerId == 0)
         {
-            StringCopy(gSaveBlock2Ptr->phone.contacts[i].name, name);
+            Phone_CopyPeerName(gSaveBlock2Ptr->phone.contacts[i].name, name);
             gSaveBlock2Ptr->phone.contacts[i].trainerId = trainerId;
             gSaveBlock2Ptr->phone.contacts[i].gender = gender;
             gSaveBlock2Ptr->phone.contacts[i].flags = flags;
@@ -430,106 +463,65 @@ bool8 Phone_IsLinkConnected(void)
     return sPhoneLinkConnected;
 }
 
-static bool8 Phone_ShouldKeepLink(void)
-{
-    if (sPendingPhoneActivity != PHONE_PENDING_NONE)
-        return FALSE;
-    if (sPhoneClubBusy)
-        return FALSE;
-    if (VarGet(VAR_CABLE_CLUB_STATE) != 0)
-        return FALSE;
-    if (!FlagGet(FLAG_SYS_CONNECTOR_ON))
-        return FALSE;
-    if (gMain.inBattle)
-        return FALSE;
-    if (InUnionRoom() == TRUE)
-        return FALSE;
-    if (GetSafariZoneFlag() == TRUE)
-        return FALSE;
-    return TRUE;
-}
-
-static bool8 Phone_CanStartCable(void)
-{
-    if (gPaletteFade.active)
-        return FALSE;
-    // Never OpenLink from Bag or Agenda — serial deadlock with the other mGBA.
-    if (!Overworld_IsFieldCB2Active())
-        return FALSE;
-    return !ArePlayerFieldControlsLocked();
-}
-
-static void Phone_StashLinkTask(void)
-{
-    u8 id = FindTaskIdByFunc(Task_PhoneLink);
-
-    if (id != TASK_NONE)
-    {
-        memcpy(sStashedPhoneTask, gTasks[id].data, sizeof(sStashedPhoneTask));
-        sStashedPhoneTaskActive = TRUE;
-    }
-    else
-    {
-        sStashedPhoneTaskActive = FALSE;
-    }
-}
-
-static void Phone_RestoreLinkTask(void)
-{
-    u8 id;
-
-    if (!Phone_ShouldKeepLink())
-    {
-        Phone_ClearOnlinePeers();
-        sStashedPhoneTaskActive = FALSE;
-        return;
-    }
-    id = CreateTask(Task_PhoneLink, 80);
-    if (sStashedPhoneTaskActive)
-        memcpy(gTasks[id].data, sStashedPhoneTask, sizeof(sStashedPhoneTask));
-    sStashedPhoneTaskActive = FALSE;
-    if (gReceivedRemoteLinkPlayers && gLinkType == LINKTYPE_PHONE)
-        Phone_SyncOnlinePeers();
-}
-
+// Mirrors the session's peer list into the Agenda's view and records anyone
+// new as a contact. Peer names are untrusted; Phone_AddContact bounds them.
 static void Phone_SyncOnlinePeers(void)
 {
+    u8 count = LinkSession_GetPeerCount();
     u8 i;
-    u8 selfId = GetMultiplayerId();
-    u8 count = GetLinkPlayerCount();
 
     Phone_ClearOnlinePeers();
-    if (count < 2)
+    if (!LinkSession_IsEstablished())
         return;
 
     for (i = 0; i < count && i < MAX_LINK_PLAYERS; i++)
     {
-        if (i == selfId)
+        const struct LinkPlayer *peer = LinkSession_GetPeer(i);
+
+        if (peer == NULL || peer->trainerId == 0)
             continue;
-        sPhoneOnlineIds[sPhoneOnlineCount++] = gLinkPlayers[i].trainerId;
-        Phone_AddContact(gLinkPlayers[i].name, gLinkPlayers[i].trainerId, gLinkPlayers[i].gender, 0);
+        sPhoneOnlineIds[sPhoneOnlineCount++] = peer->trainerId;
+        Phone_AddContact(peer->name, peer->trainerId, peer->gender, 0);
     }
     sPhoneLinkConnected = (sPhoneOnlineCount != 0);
 }
 
 void Phone_UpdateConnector(void)
 {
-    u8 id;
+    bool8 on = FlagGet(FLAG_SYS_CONNECTOR_ON);
 
-    if (FlagGet(FLAG_SYS_CONNECTOR_ON))
-    {
-        if (!FuncIsActiveTask(Task_PhoneLink))
-            CreateTask(Task_PhoneLink, 80);
+    LinkSession_SetEnabled(on);
+    if (!on)
+        Phone_ClearOnlinePeers();
+}
+
+static bool8 MapIsCableClubRoom(void)
+{
+    u16 map = gSaveBlock1Ptr->location.mapNum | (gSaveBlock1Ptr->location.mapGroup << 8);
+
+    return map == MAP_TRADE_CENTER
+        || map == MAP_BATTLE_COLOSSEUM_2P
+        || map == MAP_BATTLE_COLOSSEUM_4P
+        || map == MAP_UNION_ROOM
+        || map == MAP_RECORD_CORNER
+        || map == MAP_TWO_ISLAND_JOYFUL_GAME_CORNER;
+}
+
+// VAR_CABLE_CLUB_STATE lives in the save. A failed club warp can leave it
+// non-zero forever. Repair only when we are clearly not in a club room and
+// not mid-handoff.
+static void Phone_RepairStaleClubState(void)
+{
+    if (LinkSession_GetState() == LINK_SESSION_HANDOFF)
         return;
-    }
-
-    Phone_ClearOnlinePeers();
-    sStashedPhoneTaskActive = FALSE;
-    SetSuppressLinkErrorMessage(TRUE);
-    CloseLink();
-    id = FindTaskIdByFunc(Task_PhoneLink);
-    if (id != TASK_NONE)
-        DestroyTask(id);
+    if (gReceivedRemoteLinkPlayers && gLinkType != LINKTYPE_PHONE)
+        return;
+    if (MapIsCableClubRoom())
+        return;
+    if (VarGet(VAR_CABLE_CLUB_STATE) == 0 && !sPhoneClubBusy)
+        return;
+    VarSet(VAR_CABLE_CLUB_STATE, 0);
+    sPhoneClubBusy = FALSE;
 }
 
 void Phone_OnClubLinkupEnd(void)
@@ -540,6 +532,7 @@ void Phone_OnClubLinkupEnd(void)
     sIncomingKind = 0;
     sWaitingReply = FALSE;
     VarSet(VAR_CABLE_CLUB_STATE, 0);
+    LinkSession_EndHandoff();
     SetMainCallback1(CB1_Overworld);
     HelpSystem_Enable();
 }
@@ -559,50 +552,13 @@ void Phone_SaveReturnWarp(void)
 
 void Phone_ShouldStartRoomLinkup(void)
 {
-    gSpecialVar_Result = (sPhoneClubBusy && !gReceivedRemoteLinkPlayers);
+    gSpecialVar_Result = sPhoneClubBusy;
 }
 
 void Phone_WarpToReturnPoint(void)
 {
     SetWarpDestinationToDynamicWarp(0);
     DoWarp();
-}
-
-static void Phone_ShutdownDiscovery(void)
-{
-    u8 id;
-
-    sStashedPhoneTaskActive = FALSE;
-    Phone_ClearOnlinePeers();
-    SetSuppressLinkErrorMessage(TRUE);
-    CloseLink();
-    id = FindTaskIdByFunc(Task_PhoneLink);
-    if (id != TASK_NONE)
-        DestroyTask(id);
-}
-
-static void Phone_TryClearStaleClubState(void)
-{
-    if (VarGet(VAR_CABLE_CLUB_STATE) == 0 && !sPhoneClubBusy)
-        return;
-    if (gReceivedRemoteLinkPlayers)
-        return;
-    if (!Overworld_IsFieldCB2Active())
-        return;
-    if (gPaletteFade.active)
-        return;
-    if (ArePlayerFieldControlsLocked())
-        return;
-    switch (gMapHeader.mapType)
-    {
-    case MAP_TYPE_TOWN:
-    case MAP_TYPE_CITY:
-    case MAP_TYPE_ROUTE:
-        SetSuppressLinkErrorMessage(TRUE);
-        CloseLink();
-        Phone_OnClubLinkupEnd();
-        break;
-    }
 }
 
 static void Phone_FieldCB_ReturnForLinkup(void)
@@ -635,70 +591,71 @@ static u32 Phone_GetPlayerTrainerId(void)
 
 static bool8 Phone_TrySendMsg(u8 kind)
 {
-    struct PhoneLinkMsg msg;
+    struct PhoneAppMsg msg;
 
     if (!sPhoneLinkConnected)
         return FALSE;
-    if (!IsLinkTaskFinished())
+    if (!LinkSession_IsEstablished())
         return FALSE;
 
-    msg.magic = PHONE_MSG_MAGIC;
+    memset(&msg, 0, sizeof(msg));
     msg.kind = kind;
-    msg.pad = 0;
     msg.trainerId = Phone_GetPlayerTrainerId();
-    return SendBlock(0, &msg, sizeof(msg));
+    return LinkProto_Send(LINK_CHAN_APP, &msg, sizeof(msg));
+}
+
+static void Phone_OnAppPacket(u8 playerId, const u8 *payload, u8 len)
+{
+    const struct PhoneAppMsg *msg;
+
+    (void)playerId;
+    if (len < sizeof(*msg))
+    {
+        LinkDiag_Count(LINK_DIAG_PKT_BAD_LENGTH);
+        return;
+    }
+    msg = (const struct PhoneAppMsg *)payload;
+    if (msg->kind == PHONE_MSG_NONE || msg->kind > PHONE_MSG_DECLINE)
+    {
+        LinkDiag_Count(LINK_DIAG_PKT_BAD_CHANNEL);
+        return;
+    }
+
+    switch (msg->kind)
+    {
+    case PHONE_MSG_BATTLE:
+    case PHONE_MSG_TRADE:
+        if (sWaitingReply && sOutgoingKind == msg->kind)
+        {
+            sWaitingReply = FALSE;
+            sIncomingKind = 0;
+            sPendingPhoneActivity = (msg->kind == PHONE_MSG_TRADE) ? PHONE_PENDING_TRADE : PHONE_PENDING_BATTLE;
+        }
+        else
+        {
+            sIncomingKind = msg->kind;
+            sIncomingTrainerId = msg->trainerId;
+        }
+        break;
+    case PHONE_MSG_ACCEPT:
+        if (sWaitingReply)
+        {
+            sWaitingReply = FALSE;
+            sPendingPhoneActivity = (sOutgoingKind == PHONE_MSG_TRADE) ? PHONE_PENDING_TRADE : PHONE_PENDING_BATTLE;
+        }
+        break;
+    case PHONE_MSG_DECLINE:
+        sWaitingReply = FALSE;
+        sIncomingKind = PHONE_MSG_DECLINE;
+        break;
+    }
 }
 
 static void Phone_PollLinkMsgs(void)
 {
-    u8 status = GetBlockReceivedStatus();
-    u8 i;
-    u8 selfId = GetMultiplayerId();
-    const struct PhoneLinkMsg *msg;
-
-    if (status == 0)
+    if (!LinkSession_IsEstablished())
         return;
-
-    for (i = 0; i < MAX_LINK_PLAYERS; i++)
-    {
-        if (i == selfId || !((status >> i) & 1))
-            continue;
-        msg = (const struct PhoneLinkMsg *)gBlockRecvBuffer[i];
-        if (msg->magic != PHONE_MSG_MAGIC)
-        {
-            ResetBlockReceivedFlag(i);
-            continue;
-        }
-        switch (msg->kind)
-        {
-        case PHONE_MSG_BATTLE:
-        case PHONE_MSG_TRADE:
-            if (sWaitingReply && sOutgoingKind == msg->kind)
-            {
-                sWaitingReply = FALSE;
-                sIncomingKind = 0;
-                sPendingPhoneActivity = (msg->kind == PHONE_MSG_TRADE) ? PHONE_PENDING_TRADE : PHONE_PENDING_BATTLE;
-            }
-            else
-            {
-                sIncomingKind = msg->kind;
-                sIncomingTrainerId = msg->trainerId;
-            }
-            break;
-        case PHONE_MSG_ACCEPT:
-            if (sWaitingReply)
-            {
-                sWaitingReply = FALSE;
-                sPendingPhoneActivity = (sOutgoingKind == PHONE_MSG_TRADE) ? PHONE_PENDING_TRADE : PHONE_PENDING_BATTLE;
-            }
-            break;
-        case PHONE_MSG_DECLINE:
-            sWaitingReply = FALSE;
-            sIncomingKind = PHONE_MSG_DECLINE;
-            break;
-        }
-        ResetBlockReceivedFlag(i);
-    }
+    LinkProto_Poll();
 }
 
 static void Task_OpenAgendaIncoming(u8 taskId)
@@ -729,12 +686,21 @@ static void Phone_TryOpenAgendaForIncoming(void)
     CreateTask(Task_OpenAgendaIncoming, 80);
 }
 
+// Single per-frame entry point for the phone stack from the overworld.
 void Phone_TryResumeLink(void)
 {
-    Phone_TryClearStaleClubState();
+    Phone_RepairStaleClubState();
     Phone_TryOpenAgendaForIncoming();
-    if (Phone_ShouldKeepLink() && !FuncIsActiveTask(Task_PhoneLink))
-        CreateTask(Task_PhoneLink, 80);
+
+    LinkSession_SetEnabled(FlagGet(FLAG_SYS_CONNECTOR_ON)
+                        && !sPhoneClubBusy
+                        && sPendingPhoneActivity == PHONE_PENDING_NONE);
+    LinkSession_Update();
+    Phone_SyncOnlinePeers();
+
+    if (LinkSession_IsEstablished())
+        Phone_PollLinkMsgs();
+    LinkCoop_Update();
 }
 
 static void Phone_FinishClubLinkup(u8 taskId, u16 result)
@@ -743,7 +709,7 @@ static void Phone_FinishClubLinkup(u8 taskId, u16 result)
     SetSuppressLinkErrorMessage(TRUE);
     if (result != LINKUP_SUCCESS)
     {
-        CloseLink();
+        LinkSession_EndHandoff();
         SetMainCallback1(CB1_Overworld);
         ScriptContext_SetupScript(EventScript_PhoneClubLinkupFailed);
     }
@@ -762,187 +728,113 @@ static u16 Phone_GetClubLinkType(void)
     return LINKTYPE_SINGLE_BATTLE;
 }
 
-static bool8 Phone_IsClubLinkType(u16 linkType)
-{
-    return linkType == LINKTYPE_SINGLE_BATTLE || linkType == LINKTYPE_TRADE_SETUP;
-}
-
-static bool8 Phone_ClubTypesMatch(u16 expected)
+static void Phone_ApplyClubLinkType(void)
 {
     u8 i;
-    u8 n = GetLinkPlayerCount();
+    u8 n;
+    u16 type = Phone_GetClubLinkType();
 
-    if (n < 2)
-        return FALSE;
-    for (i = 0; i < n; i++)
-    {
-        if (gLinkPlayers[i].linkType != expected)
-            return FALSE;
-    }
-    return TRUE;
-}
-
-static bool8 Phone_ClubSelectionsDiffer(void)
-{
-    u8 i;
-    u8 n = GetLinkPlayerCount();
-
-    if (n < 2)
-        return FALSE;
-    for (i = 0; i < n; i++)
-    {
-        if (!Phone_IsClubLinkType(gLinkPlayers[i].linkType))
-            return FALSE;
-    }
-    for (i = 1; i < n; i++)
-    {
-        if (gLinkPlayers[i].linkType != gLinkPlayers[0].linkType)
-            return TRUE;
-    }
-    return FALSE;
+    gLinkType = type;
+    n = GetLinkPlayerCount();
+    for (i = 0; i < n && i < MAX_LINK_PLAYERS; i++)
+        gLinkPlayers[i].linkType = type;
 }
 
 void TryPhoneClubLinkup(void)
 {
     gSpecialVar_Result = LINKUP_ONGOING;
     SetSuppressLinkErrorMessage(TRUE);
-    gLinkType = Phone_GetClubLinkType();
+    Phone_ApplyClubLinkType();
     if (gLinkType == LINKTYPE_TRADE_SETUP)
         gBattleTypeFlags = 0;
     CreateTask(Task_PhoneClubLinkup, 80);
 }
 
 enum {
-    CLUB_LINK_WAIT_SI,
-    CLUB_LINK_OPEN,
-    CLUB_LINK_BOOT,
-    CLUB_LINK_WAIT_PARTNER,
-    CLUB_LINK_WAIT_EXCHANGE,
-    CLUB_LINK_WAIT_CARD,
+    CLUB_HANDOFF_WAIT_LINK,
+    CLUB_HANDOFF_ARRIVE,
+    CLUB_HANDOFF_APPLY,
+    CLUB_HANDOFF_SEND_CARD,
+    CLUB_HANDOFF_WAIT_CARD,
 };
 
 static void Task_PhoneClubLinkup(u8 taskId)
 {
     s16 *data = gTasks[taskId].data;
-    u8 status;
-    u8 playerCount;
     u8 i;
+    u16 budget = LinkSession_GetRendezvousBudget();
 
     switch (data[0])
     {
-    case CLUB_LINK_WAIT_SI:
-        SetSuppressLinkErrorMessage(TRUE);
-        CloseLink();
-        if (gReceivedRemoteLinkPlayers)
-            break;
-        if (++data[1] > 32)
-        {
-            data[1] = 0;
-            data[2] = 0;
-            data[0] = CLUB_LINK_OPEN;
-        }
-        break;
-    case CLUB_LINK_OPEN:
-        gWirelessCommType = 0;
-        gLinkType = Phone_GetClubLinkType();
-        OpenLinkTimed();
-        SetSuppressLinkErrorMessage(TRUE);
-        ResetLinkPlayers();
-        ResetLinkPlayerCount();
-        data[1] = 0;
-        data[0] = CLUB_LINK_BOOT;
-        break;
-    case CLUB_LINK_BOOT:
-        if (++data[1] > 9)
-        {
-            data[1] = 0;
-            data[0] = CLUB_LINK_WAIT_PARTNER;
-        }
-        break;
-    case CLUB_LINK_WAIT_PARTNER:
-        playerCount = GetLinkPlayerCount_2();
+    case CLUB_HANDOFF_WAIT_LINK:
+        // Drain leftover presence packets so they cannot be mistaken for
+        // trainer cards, and wait until the partner has finished loading.
+        LinkProto_Poll();
         if (HasLinkErrorOccurred() == TRUE)
         {
-            CloseLink();
-            data[1] = 0;
-            data[2] = 0;
-            data[0] = CLUB_LINK_WAIT_SI;
+            Phone_FinishClubLinkup(taskId, LINKUP_CONNECTION_ERROR);
             break;
         }
-        if (Phone_ClubSelectionsDiffer())
+        if (gReceivedRemoteLinkPlayers && GetLinkPlayerCount_2() >= 2)
         {
-            Phone_FinishClubLinkup(taskId, LINKUP_DIFF_SELECTIONS);
-            break;
-        }
-        if (playerCount >= 2)
-        {
-            if (!Phone_ClubTypesMatch(Phone_GetClubLinkType()))
-            {
-                CloseLink();
-                data[1] = 0;
-                data[2] = 0;
-                data[0] = CLUB_LINK_WAIT_SI;
-                break;
-            }
-            if (IsLinkMaster() == TRUE && data[2] == 0)
-            {
-                CheckShouldAdvanceLinkState();
-                data[2] = 1;
-            }
             data[1] = 0;
-            data[0] = CLUB_LINK_WAIT_EXCHANGE;
+            data[0] = CLUB_HANDOFF_ARRIVE;
         }
-        else if (++data[1] > 480)
+        else if (++data[1] > budget)
         {
             Phone_FinishClubLinkup(taskId, LINKUP_FAILED);
         }
         break;
-    case CLUB_LINK_WAIT_EXCHANGE:
-        status = GetLinkPlayerDataExchangeStatusTimed(2, 2);
-        if (status == EXCHANGE_COMPLETE)
+    case CLUB_HANDOFF_ARRIVE:
+        LinkProto_Poll();
+        LinkSession_NotifyArrived();
+        if (HasLinkErrorOccurred() == TRUE)
         {
-            gSpecialVar_Result = LINKUP_SUCCESS;
-            gFieldLinkPlayerCount = GetLinkPlayerCount_2();
-            gLocalLinkPlayerId = GetMultiplayerId();
-            SaveLinkPlayers(gFieldLinkPlayerCount);
-            TrainerCard_GenerateCardForLinkPlayer((struct TrainerCard *)gBlockSendBuffer);
-            SendBlockRequest(BLOCK_REQ_SIZE_100);
-            data[1] = 0;
-            data[0] = CLUB_LINK_WAIT_CARD;
-        }
-        else if (status == EXCHANGE_DIFF_SELECTIONS)
-        {
-            if (Phone_ClubSelectionsDiffer())
-            {
-                Phone_FinishClubLinkup(taskId, LINKUP_DIFF_SELECTIONS);
-            }
-            else
-            {
-                CloseLink();
-                data[1] = 0;
-                data[2] = 0;
-                data[0] = CLUB_LINK_WAIT_SI;
-            }
-        }
-        else if (status == EXCHANGE_PLAYER_NOT_READY || status == EXCHANGE_PARTNER_NOT_READY)
-        {
-            if (++data[1] > 480)
-                Phone_FinishClubLinkup(taskId, LINKUP_FAILED);
+            Phone_FinishClubLinkup(taskId, LINKUP_CONNECTION_ERROR);
             break;
         }
-        else if (HasLinkErrorOccurred() == TRUE)
+        if (LinkSession_RendezvousComplete())
         {
-            CloseLink();
             data[1] = 0;
-            data[2] = 0;
-            data[0] = CLUB_LINK_WAIT_SI;
+            data[0] = CLUB_HANDOFF_APPLY;
         }
-        else if (++data[1] > 480)
+        else if (++data[1] > budget)
         {
             Phone_FinishClubLinkup(taskId, LINKUP_FAILED);
         }
         break;
-    case CLUB_LINK_WAIT_CARD:
+    case CLUB_HANDOFF_APPLY:
+        if (!gReceivedRemoteLinkPlayers || GetLinkPlayerCount_2() < 2)
+        {
+            Phone_FinishClubLinkup(taskId, LINKUP_FAILED);
+            break;
+        }
+        Phone_ApplyClubLinkType();
+        gFieldLinkPlayerCount = GetLinkPlayerCount_2();
+        gLocalLinkPlayerId = GetMultiplayerId();
+        SaveLinkPlayers(gFieldLinkPlayerCount);
+        data[1] = 0;
+        data[0] = CLUB_HANDOFF_SEND_CARD;
+        break;
+    case CLUB_HANDOFF_SEND_CARD:
+        if (HasLinkErrorOccurred() == TRUE)
+        {
+            Phone_FinishClubLinkup(taskId, LINKUP_CONNECTION_ERROR);
+            break;
+        }
+        if (!IsLinkTaskFinished())
+            break;
+        TrainerCard_GenerateCardForLinkPlayer((struct TrainerCard *)gBlockSendBuffer);
+        if (!SendBlockRequest(BLOCK_REQ_SIZE_100))
+        {
+            if (++data[1] > 240)
+                Phone_FinishClubLinkup(taskId, LINKUP_CONNECTION_ERROR);
+            break;
+        }
+        data[1] = 0;
+        data[0] = CLUB_HANDOFF_WAIT_CARD;
+        break;
+    case CLUB_HANDOFF_WAIT_CARD:
         if (HasLinkErrorOccurred() == TRUE)
         {
             Phone_FinishClubLinkup(taskId, LINKUP_CONNECTION_ERROR);
@@ -962,151 +854,6 @@ static void Task_PhoneClubLinkup(u8 taskId)
     }
 }
 
-#define tState data[0]
-#define tTimer data[1]
-#define tAdvanced data[2]
-#define tChime data[3]
-
-enum {
-    PHONE_LINK_OPEN,
-    PHONE_LINK_BOOT,
-    PHONE_LINK_WAIT_PARTNER,
-    PHONE_LINK_WAIT_EXCHANGE,
-    PHONE_LINK_CONNECTED,
-    PHONE_LINK_CLOSE,
-};
-
-static void Task_PhoneLink(u8 taskId)
-{
-    s16 *data = gTasks[taskId].data;
-    u8 status;
-    u8 playerCount;
-
-    if (!Phone_ShouldKeepLink() && tState != PHONE_LINK_CLOSE)
-    {
-        tState = PHONE_LINK_CLOSE;
-        tTimer = 0;
-    }
-
-    switch (tState)
-    {
-    case PHONE_LINK_OPEN:
-        // Bag must not OpenLink (stalls the item message on player 2).
-        // Field and Agenda are OK.
-        if (!Phone_CanStartCable())
-            break;
-        if (gReceivedRemoteLinkPlayers && gLinkType == LINKTYPE_PHONE)
-        {
-            Phone_SyncOnlinePeers();
-            tState = PHONE_LINK_CONNECTED;
-            break;
-        }
-        if (gReceivedRemoteLinkPlayers && gLinkType != LINKTYPE_PHONE)
-        {
-            DestroyTask(taskId);
-            return;
-        }
-        gWirelessCommType = 0;
-        gLinkType = LINKTYPE_PHONE;
-        OpenLinkTimed();
-        SetSuppressLinkErrorMessage(TRUE);
-        ResetLinkPlayers();
-        ResetLinkPlayerCount();
-        tTimer = 0;
-        tAdvanced = 0;
-        tState = PHONE_LINK_BOOT;
-        break;
-    case PHONE_LINK_BOOT:
-        if (++tTimer > 9)
-        {
-            tTimer = 0;
-            tState = PHONE_LINK_WAIT_PARTNER;
-        }
-        break;
-    case PHONE_LINK_WAIT_PARTNER:
-        playerCount = GetLinkPlayerCount_2();
-        if (HasLinkErrorOccurred() == TRUE)
-        {
-            CloseLink();
-            tTimer = 0;
-            tState = PHONE_LINK_OPEN;
-            break;
-        }
-        if (playerCount >= 2)
-        {
-            if (IsLinkMaster() == TRUE && tAdvanced == 0)
-            {
-                CheckShouldAdvanceLinkState();
-                tAdvanced = 1;
-            }
-            tTimer = 0;
-            tState = PHONE_LINK_WAIT_EXCHANGE;
-        }
-        else if (++tTimer > 360)
-        {
-            CloseLink();
-            tTimer = 0;
-            tState = PHONE_LINK_OPEN;
-        }
-        break;
-    case PHONE_LINK_WAIT_EXCHANGE:
-        status = GetLinkPlayerDataExchangeStatusTimed(2, 4);
-        if (status == EXCHANGE_COMPLETE)
-        {
-            Phone_SyncOnlinePeers();
-            if (sPhoneLinkConnected)
-                tChime = 1;
-            tTimer = 0;
-            tState = PHONE_LINK_CONNECTED;
-        }
-        else if (status == EXCHANGE_TIMED_OUT
-              || status == EXCHANGE_WRONG_NUM_PLAYERS
-              || status == EXCHANGE_DIFF_SELECTIONS
-              || HasLinkErrorOccurred() == TRUE)
-        {
-            Phone_ClearOnlinePeers();
-            CloseLink();
-            tTimer = 0;
-            tAdvanced = 0;
-            tChime = 0;
-            tState = PHONE_LINK_OPEN;
-        }
-        break;
-    case PHONE_LINK_CONNECTED:
-        playerCount = GetLinkPlayerCount_2();
-        if (HasLinkErrorOccurred() == TRUE || playerCount < 2 || !gReceivedRemoteLinkPlayers)
-        {
-            if (++tTimer > 45)
-            {
-                Phone_ClearOnlinePeers();
-                CloseLink();
-                tTimer = 0;
-                tAdvanced = 0;
-                tChime = 0;
-                tState = PHONE_LINK_OPEN;
-            }
-        }
-        else
-        {
-            tTimer = 0;
-            Phone_SyncOnlinePeers();
-            Phone_PollLinkMsgs();
-        }
-        break;
-    case PHONE_LINK_CLOSE:
-        Phone_ClearOnlinePeers();
-        SetSuppressLinkErrorMessage(TRUE);
-        CloseLink();
-        DestroyTask(taskId);
-        break;
-    }
-}
-
-#undef tState
-#undef tTimer
-#undef tAdvanced
-#undef tChime
-
 static void VBlankCB_PhoneAgenda(void)
 {
     LoadOam();
@@ -1116,8 +863,15 @@ static void VBlankCB_PhoneAgenda(void)
 
 void ShowPhoneAgenda(MainCallback exitCallback)
 {
+    // A remote request can ask to open the Agenda while it is already open.
+    // Allocating twice would leak the first arena and leave two owners of it.
+    if (sAgenda != NULL)
+        return;
+
     Phone_EnsureReady();
     sAgenda = AllocZeroed(sizeof(*sAgenda));
+    if (sAgenda == NULL)
+        return;
     sAgenda->savedCallback = exitCallback;
     sAgenda->loadState = 0;
     sAgenda->uiState = AGENDA_STATE_MAIN;
@@ -1126,19 +880,22 @@ void ShowPhoneAgenda(MainCallback exitCallback)
     SetMainCallback2(CB2_PhoneAgenda);
 }
 
+// Worst case: 7 name + 1 pad + 1 space + 5 digits + 5 status + terminator.
+// LABEL_WIDTH must stay comfortably above that.
 static void Phone_FormatLabel(u32 destIndex, const struct PhoneContact *contact)
 {
+    u8 *label = sAgenda->labels[destIndex];
     u8 *ptr;
     u16 displayId;
 
-    ptr = StringCopy(sAgendaLabels[destIndex], contact->name);
-    while (ptr - sAgendaLabels[destIndex] < 8)
+    Phone_CopyPeerName(label, contact->name);
+    ptr = label + StringLength(label);
+    while (ptr - label < 8)
         *ptr++ = CHAR_SPACE;
     *ptr++ = CHAR_SPACE;
     displayId = Phone_GetDisplayId(contact->trainerId);
     ConvertIntToDecimalStringN(ptr, displayId, STR_CONV_MODE_LEADING_ZEROS, 5);
-    StringAppend(sAgendaLabels[destIndex],
-                 Phone_IsTrainerOnline(contact->trainerId) ? sText_On : sText_Offline);
+    StringAppend(label, Phone_IsTrainerOnline(contact->trainerId) ? sText_On : sText_Offline);
 }
 
 static void Phone_DestroyList(void)
@@ -1148,7 +905,6 @@ static void Phone_DestroyList(void)
         DestroyListMenuTask(sAgenda->listTaskId, NULL, NULL);
         sAgenda->listTaskId = TASK_NONE;
     }
-    TRY_FREE_AND_SET_NULL(sAgendaItems);
     sAgenda->numItems = 0;
 }
 
@@ -1160,14 +916,13 @@ static void Phone_BuildAgendaList(void)
     Phone_DestroyList();
     FillWindowPixelBuffer(WIN_LIST, PIXEL_FILL(1));
 
-    sAgendaItems = AllocZeroed(PHONE_MAX_CONTACTS * sizeof(struct ListMenuItem));
     for (i = 0; i < PHONE_MAX_CONTACTS; i++)
     {
         if (gSaveBlock2Ptr->phone.contacts[i].trainerId != 0)
         {
             Phone_FormatLabel(n, &gSaveBlock2Ptr->phone.contacts[i]);
-            sAgendaItems[n].label = sAgendaLabels[n];
-            sAgendaItems[n].index = i;
+            sAgenda->items[n].label = sAgenda->labels[n];
+            sAgenda->items[n].index = i;
             n++;
         }
     }
@@ -1176,7 +931,7 @@ static void Phone_BuildAgendaList(void)
     if (n != 0)
     {
         template = sAgendaListTemplate;
-        template.items = sAgendaItems;
+        template.items = sAgenda->items;
         template.totalItems = n;
         if (template.maxShowed > n)
             template.maxShowed = n;
@@ -1215,6 +970,64 @@ static void Phone_PrintFooter(const u8 *str)
     AddTextPrinterParameterized3(WIN_FOOTER, FONT_SMALL, 8, 1, sMenuTextColor, TEXT_SKIP_DRAW, str);
     PutWindowTilemap(WIN_FOOTER);
     CopyWindowToVram(WIN_FOOTER, COPYWIN_FULL);
+}
+
+static void Phone_PrintDiagRow(u8 y, const u8 *label, const u16 *values, u8 count)
+{
+    u8 buf[8 * 6 + 1];
+    u8 *ptr = buf;
+    u8 i;
+
+    for (i = 0; i < count && i < 8; i++)
+    {
+        if (i != 0)
+            *ptr++ = CHAR_SLASH;
+        ptr = ConvertIntToDecimalStringN(ptr, values[i], STR_CONV_MODE_LEFT_ALIGN, 5);
+    }
+    *ptr = EOS;
+
+    AddTextPrinterParameterized3(WIN_LIST, FONT_SMALL, 4, y, sMenuTextColor, TEXT_SKIP_DRAW, label);
+    AddTextPrinterParameterized3(WIN_LIST, FONT_SMALL, 116, y, sMenuTextColor, TEXT_SKIP_DRAW, buf);
+}
+
+// Renders into the existing list window, so entering diagnostics allocates
+// nothing and touches no VRAM the Agenda did not already own.
+static void Phone_ShowDiagnostics(void)
+{
+    const struct LinkDiagStats *stats = LinkDiag_GetStats();
+    u16 row[4];
+
+    Phone_DestroyList();
+    FillWindowPixelBuffer(WIN_LIST, PIXEL_FILL(1));
+
+    row[0] = stats->events[LINK_DIAG_SESSION_OPENED];
+    row[1] = stats->events[LINK_DIAG_SESSION_ESTABLISHED];
+    row[2] = stats->events[LINK_DIAG_SESSION_DROPPED];
+    Phone_PrintDiagRow(1, sText_DiagSessions, row, 3);
+
+    row[0] = stats->events[LINK_DIAG_PKT_SENT];
+    row[1] = stats->events[LINK_DIAG_PKT_RECV];
+    row[2] = stats->events[LINK_DIAG_PKT_SEND_FAILED];
+    Phone_PrintDiagRow(13, sText_DiagPackets, row, 3);
+
+    row[0] = stats->events[LINK_DIAG_PKT_BAD_MAGIC];
+    row[1] = stats->events[LINK_DIAG_PKT_BAD_VERSION];
+    row[2] = stats->events[LINK_DIAG_PKT_BAD_CHANNEL];
+    Phone_PrintDiagRow(25, sText_DiagRejected, row, 3);
+
+    row[0] = stats->hardwareErrors;
+    row[1] = stats->checksumErrors;
+    row[2] = stats->queueFullErrors;
+    row[3] = stats->lagErrors;
+    Phone_PrintDiagRow(37, sText_DiagErrors, row, 4);
+
+    row[0] = stats->events[LINK_DIAG_TIMEOUT];
+    row[1] = stats->events[LINK_DIAG_PEER_SANITIZED];
+    row[2] = stats->peakRecvQueue;
+    Phone_PrintDiagRow(49, sText_DiagMisc, row, 3);
+
+    PutWindowTilemap(WIN_LIST);
+    CopyWindowToVram(WIN_LIST, COPYWIN_FULL);
 }
 
 static void Phone_BeginRemoveConfirm(u32 contactSlot)
@@ -1270,7 +1083,6 @@ static void Phone_QueueClubActivity(u8 taskId, u8 kind)
     Phone_DestroyActionWindow();
     sPhoneClubBusy = TRUE;
     sPendingPhoneActivity = kind;
-    Phone_ShutdownDiscovery();
     BeginNormalPaletteFade(PALETTES_ALL, 0, 0, 16, RGB_BLACK);
     gTasks[taskId].func = Task_ClosePhoneAgenda;
 }
@@ -1361,14 +1173,37 @@ static void Phone_HandleIncomingConfirm(u8 taskId)
 
 static void Phone_HandleFlushAccept(u8 taskId)
 {
-    if (gReceivedRemoteLinkPlayers && !IsLinkTaskFinished())
-        return;
-    if (gReceivedRemoteLinkPlayers && sFlushDelay < 24)
+    u16 linkType;
+
+    if (sPendingPhoneActivity == PHONE_PENDING_TRADE)
     {
-        sFlushDelay++;
+        gSpecialVar_0x8004 = USING_TRADE_CENTER;
+        linkType = LINKTYPE_TRADE_SETUP;
+    }
+    else
+    {
+        gSpecialVar_0x8004 = USING_SINGLE_BATTLE;
+        linkType = LINKTYPE_SINGLE_BATTLE;
+    }
+
+    if (!LinkSession_IsHandoffPending() && !LinkSession_IsHandoffReady())
+        LinkSession_RequestHandoff(linkType);
+
+    if (!LinkSession_IsHandoffReady())
+    {
+        if (++sFlushDelay > 240)
+        {
+            sFlushDelay = 0;
+            LinkSession_CancelHandoff();
+            sPendingPhoneActivity = PHONE_PENDING_NONE;
+            sAgenda->uiState = AGENDA_STATE_DECLINED;
+            Phone_PrintFooter(sText_RequestDeclined);
+        }
         return;
     }
+
     sFlushDelay = 0;
+    LinkSession_BeginHandoff();
     Phone_QueueClubActivity(taskId, sPendingPhoneActivity);
 }
 
@@ -1382,9 +1217,10 @@ static void Phone_HandleWaitReply(u8 taskId)
     }
     if (sOutgoingKind != 0 && (!gReceivedRemoteLinkPlayers || !sPhoneLinkConnected))
     {
-        sPendingPhoneActivity = (sOutgoingKind == PHONE_MSG_TRADE) ? PHONE_PENDING_TRADE : PHONE_PENDING_BATTLE;
-        sFlushDelay = 0;
-        sAgenda->uiState = AGENDA_STATE_FLUSH_ACCEPT;
+        sWaitingReply = FALSE;
+        sOutgoingKind = 0;
+        sAgenda->uiState = AGENDA_STATE_DECLINED;
+        Phone_PrintFooter(sText_RequestDeclined);
         return;
     }
     if (sIncomingKind == PHONE_MSG_DECLINE)
@@ -1447,9 +1283,9 @@ static void CB2_PhoneAgenda(void)
         SetHBlankCallback(NULL);
         ScanlineEffect_Stop();
         ResetPaletteFade();
-        Phone_StashLinkTask();
+        // The session is not a task, so ResetTasks() no longer destroys it and
+        // nothing has to be stashed across the screen transition.
         ResetTasks();
-        Phone_RestoreLinkTask();
         ResetSpriteData();
         FreeAllSpritePalettes();
         DmaClearLarge16(3, (void *)VRAM, VRAM_SIZE, 0x1000);
@@ -1485,6 +1321,11 @@ static void CB2_PhoneAgenda(void)
         sAgenda->loadState++;
         break;
     default:
+        // The Agenda owns the CPU while open, so it must keep the session
+        // ticking or the link would stall behind this screen.
+        LinkSession_Update();
+        Phone_SyncOnlinePeers();
+        LinkCoop_Update();
         RunTasks();
         AnimateSprites();
         BuildOamBuffer();
@@ -1514,6 +1355,9 @@ static void Task_PhoneAgenda(u8 taskId)
 
     Phone_RefreshAgendaIfNeeded();
     Phone_PollLinkMsgs();
+
+    if (LinkProto_HasVersionMismatch() && sAgenda->uiState == AGENDA_STATE_MAIN)
+        Phone_PrintFooter(sText_RomMismatch);
 
     if (sPendingPhoneActivity != PHONE_PENDING_NONE
      && sAgenda->uiState != AGENDA_STATE_WAIT_REPLY
@@ -1558,6 +1402,19 @@ static void Task_PhoneAgenda(u8 taskId)
         return;
     }
 
+    if (sAgenda->uiState == AGENDA_STATE_DIAG)
+    {
+        if (JOY_NEW(SELECT_BUTTON) || JOY_NEW(B_BUTTON))
+        {
+            PlaySE(SE_SELECT);
+            sAgenda->uiState = AGENDA_STATE_MAIN;
+            Phone_PrintFooter(sText_FooterMain);
+            Phone_BuildAgendaList();
+            CopyBgTilemapBufferToVram(0);
+        }
+        return;
+    }
+
     if (sAgenda->uiState == AGENDA_STATE_CONFIRM_REMOVE)
     {
         Phone_HandleRemoveConfirm(taskId);
@@ -1567,6 +1424,16 @@ static void Task_PhoneAgenda(u8 taskId)
     if (sAgenda->uiState == AGENDA_STATE_ACTIONS)
     {
         Phone_HandleActionMenu(taskId);
+        return;
+    }
+
+    if (JOY_NEW(SELECT_BUTTON))
+    {
+        PlaySE(SE_SELECT);
+        sAgenda->uiState = AGENDA_STATE_DIAG;
+        Phone_PrintFooter(sText_FooterDiag);
+        Phone_ShowDiagnostics();
+        CopyBgTilemapBufferToVram(0);
         return;
     }
 
