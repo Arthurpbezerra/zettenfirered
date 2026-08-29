@@ -459,4 +459,5 @@ gSpecials::
 	def_special Phone_SaveReturnWarp
 	def_special Phone_ShouldStartRoomLinkup
 	def_special Phone_WarpToReturnPoint
+	def_special Phone_StartOverworldTrade
 gSpecialsEnd::

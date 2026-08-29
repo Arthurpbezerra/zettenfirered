@@ -43,5 +43,6 @@ void LinkProto_SetHandler(u8 channel, LinkProtoHandler handler);
 bool8 LinkProto_Send(u8 channel, const void *payload, u8 len);
 void LinkProto_Poll(void);
 bool8 LinkProto_HasVersionMismatch(void);
+bool8 LinkProto_HasPendingSend(void);
 
 #endif // GUARD_LINK_PROTO_H

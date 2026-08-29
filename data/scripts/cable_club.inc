@@ -1769,11 +1769,7 @@ EventScript_PhoneTryTrade::
 	call CableClub_EventScript_CheckPartyTradeRequirements
 	goto_if_eq VAR_RESULT, FALSE, EventScript_PhoneTradeAbortQuiet
 	special HelpSystem_Disable
-	special Phone_SaveReturnWarp
-	setvar VAR_0x8004, USING_TRADE_CENTER
-	copyvar VAR_CABLE_CLUB_STATE, VAR_0x8004
-	setvar VAR_0x8007, 0
-	warp MAP_TRADE_CENTER, 5, 8
+	special Phone_StartOverworldTrade
 	waitstate
 	end
 

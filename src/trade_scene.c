@@ -19,6 +19,7 @@
 #include "pokeball.h"
 #include "evolution_scene.h"
 #include "overworld.h"
+#include "phone.h"
 #include "field_fadetransition.h"
 #include "quest_log.h"
 #include "help_system.h"
@@ -2607,6 +2608,11 @@ static void CB2_SaveAndEndTrade(void)
         }
         if (gWirelessCommType)
             MysteryGift_TryIncrementStat(CARD_STAT_NUM_TRADES, gLinkPlayers[GetMultiplayerId() ^ 1].trainerId);
+        // Overworld trades must continue-warp to the current field. dynamicWarp
+        // defaults to (0,0)=Colosseum, which is why a reset after trade dumped
+        // the player in a link room.
+        if (Phone_ShouldReturnToCurrentField())
+            Phone_SaveReturnWarp();
         SetContinueGameWarpStatusToDynamicWarp();
         LinkFullSave_Init();
 #if REVISION >= 0xA
@@ -2721,7 +2727,7 @@ static void CB2_SaveAndEndTrade(void)
         {
             if (gWirelessCommType && gMain.savedCallback == CB2_StartCreateTradeMenu)
                 SetLinkStandbyCallback();
-            else
+            else if (!Phone_IsClubSessionActive())
                 SetCloseLinkCallback();
             gMain.state++;
         }
@@ -2735,7 +2741,7 @@ static void CB2_SaveAndEndTrade(void)
                 SetMainCallback2(CB2_FreeTradeAnim);
             }
         }
-        else if (!gReceivedRemoteLinkPlayers)
+        else if (Phone_IsClubSessionActive() || !gReceivedRemoteLinkPlayers)
         {
             gSoftResetDisabled = FALSE;
             SetMainCallback2(CB2_FreeTradeAnim);

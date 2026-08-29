@@ -10,13 +10,74 @@ struct LinkProtoCtx
     u8 seenMask;
     u8 nextSeq;
     bool8 versionMismatch;
+    bool8 pending;
+    u8 pendingSize;
+    u8 pendingChannel;
     LinkProtoHandler handlers[LINK_CHAN_COUNT];
 };
 
 static struct LinkProtoCtx sProto;
 static u8 sSendScratch[sizeof(struct LinkProtoHeader) + LINK_PROTO_MAX_PAYLOAD];
+static u8 sPendingScratch[sizeof(struct LinkProtoHeader) + LINK_PROTO_MAX_PAYLOAD];
 
 STATIC_ASSERT(sizeof(sSendScratch) <= BLOCK_BUFFER_SIZE, LinkProtoScratchFits);
+STATIC_ASSERT(sizeof(sPendingScratch) <= BLOCK_BUFFER_SIZE, LinkProtoPendingFits);
+
+static bool8 ChannelYieldsToPending(u8 channel)
+{
+    return channel == LINK_CHAN_PRESENCE || channel == LINK_CHAN_COOP;
+}
+
+static void ClearPending(void)
+{
+    sProto.pending = FALSE;
+    sProto.pendingSize = 0;
+    sProto.pendingChannel = LINK_CHAN_NONE;
+}
+
+static bool8 Transmit(const u8 *buf, u16 size)
+{
+    if (!SendBlock(0, buf, size))
+    {
+        LinkDiag_Count(LINK_DIAG_PKT_SEND_FAILED);
+        return FALSE;
+    }
+    sProto.nextSeq++;
+    if (sProto.nextSeq == 0)
+        sProto.nextSeq = 1;
+    LinkDiag_Count(LINK_DIAG_PKT_SENT);
+    return TRUE;
+}
+
+static void BuildPacket(u8 *dest, u8 channel, const void *payload, u8 len)
+{
+    struct LinkProtoHeader *hdr = (struct LinkProtoHeader *)dest;
+
+    hdr->magic = LINK_PROTO_MAGIC;
+    hdr->protoVersion = LINK_PROTO_VERSION;
+    hdr->channel = channel;
+    hdr->len = len;
+    hdr->seq = sProto.nextSeq;
+    if (len != 0)
+        memcpy(dest + sizeof(*hdr), payload, len);
+}
+
+static bool8 FlushPending(void)
+{
+    struct LinkProtoHeader *hdr;
+
+    if (!sProto.pending)
+        return TRUE;
+    if (!IsLinkTaskFinished())
+        return FALSE;
+
+    hdr = (struct LinkProtoHeader *)sPendingScratch;
+    hdr->seq = sProto.nextSeq;
+    if (!Transmit(sPendingScratch, sProto.pendingSize))
+        return FALSE;
+    ClearPending();
+    return TRUE;
+}
 
 void LinkProto_Reset(void)
 {
@@ -27,6 +88,7 @@ void LinkProto_Reset(void)
     sProto.seenMask = 0;
     sProto.nextSeq = 1;
     sProto.versionMismatch = FALSE;
+    ClearPending();
 }
 
 void LinkProto_SetHandler(u8 channel, LinkProtoHandler handler)
@@ -40,9 +102,13 @@ bool8 LinkProto_HasVersionMismatch(void)
     return sProto.versionMismatch;
 }
 
+bool8 LinkProto_HasPendingSend(void)
+{
+    return sProto.pending;
+}
+
 bool8 LinkProto_Send(u8 channel, const void *payload, u8 len)
 {
-    struct LinkProtoHeader *hdr;
     u16 size;
 
     if (channel <= LINK_CHAN_NONE || channel >= LINK_CHAN_COUNT)
@@ -51,41 +117,49 @@ bool8 LinkProto_Send(u8 channel, const void *payload, u8 len)
         return FALSE;
     if (len > LINK_PROTO_MAX_PAYLOAD)
         return FALSE;
-    if (!IsLinkTaskFinished())
-        return FALSE;
 
-    hdr = (struct LinkProtoHeader *)sSendScratch;
-    hdr->magic = LINK_PROTO_MAGIC;
-    hdr->protoVersion = LINK_PROTO_VERSION;
-    hdr->channel = channel;
-    hdr->len = len;
-    hdr->seq = sProto.nextSeq;
-    if (len != 0)
-        memcpy(sSendScratch + sizeof(*hdr), payload, len);
+    size = sizeof(struct LinkProtoHeader) + len;
+    FlushPending();
 
-    size = sizeof(*hdr) + len;
-    if (!SendBlock(0, sSendScratch, size))
+    if (ChannelYieldsToPending(channel))
     {
-        LinkDiag_Count(LINK_DIAG_PKT_SEND_FAILED);
-        return FALSE;
+        if (sProto.pending || !IsLinkTaskFinished())
+            return FALSE;
+        BuildPacket(sSendScratch, channel, payload, len);
+        return Transmit(sSendScratch, size);
     }
 
-    sProto.nextSeq++;
-    if (sProto.nextSeq == 0)
-        sProto.nextSeq = 1;
-    LinkDiag_Count(LINK_DIAG_PKT_SENT);
+    // Control/app: if the wire is busy, keep one datagram and retry from Poll.
+    if (IsLinkTaskFinished())
+    {
+        BuildPacket(sSendScratch, channel, payload, len);
+        if (Transmit(sSendScratch, size))
+            return TRUE;
+    }
+
+    if (sProto.pending && sProto.pendingChannel == LINK_CHAN_CONTROL
+     && channel != LINK_CHAN_CONTROL)
+        return FALSE;
+
+    BuildPacket(sPendingScratch, channel, payload, len);
+    sProto.pendingSize = size;
+    sProto.pendingChannel = channel;
+    sProto.pending = TRUE;
     return TRUE;
 }
 
 void LinkProto_Poll(void)
 {
-    u8 status = GetBlockReceivedStatus();
+    u8 status;
     u8 i;
     u8 selfId = GetMultiplayerId();
     const struct LinkProtoHeader *hdr;
     const u8 *raw;
     u8 len;
 
+    FlushPending();
+
+    status = GetBlockReceivedStatus();
     if (status == 0)
         return;
 

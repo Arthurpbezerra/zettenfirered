@@ -29,8 +29,12 @@
 #include "task.h"
 #include "text.h"
 #include "text_window.h"
+#include "trade.h"
 #include "trainer_card.h"
 #include "window.h"
+#include "pokemon.h"
+#include "script_pokemon_util.h"
+#include "save.h"
 #include "constants/cable_club.h"
 #include "constants/flags.h"
 #include "constants/items.h"
@@ -113,6 +117,7 @@ static EWRAM_DATA bool8 sPhoneLinkConnected = FALSE;
 static EWRAM_DATA u16 sAgendaSeenLink = 0xFFFF;
 static EWRAM_DATA u8 sPendingPhoneActivity = 0;
 static EWRAM_DATA bool8 sPhoneClubBusy = FALSE;
+static EWRAM_DATA bool8 sPhoneStayOnField = FALSE;
 static EWRAM_DATA u8 sOutgoingKind = 0;
 static EWRAM_DATA u8 sIncomingKind = 0;
 static EWRAM_DATA u32 sIncomingTrainerId = 0;
@@ -151,6 +156,10 @@ static void Phone_HandleFlushAccept(u8 taskId);
 static void Phone_HandleWaitReply(u8 taskId);
 static void Task_OpenAgendaIncoming(u8 taskId);
 static void Phone_TryOpenAgendaForIncoming(void);
+static bool8 Phone_PartyCanTrade(void);
+static const u8 *Phone_TradeBlockReason(void);
+static void Phone_EnterOverworldTrade(void);
+static void Phone_ApplyClubLinkType(void);
 
 static const u8 sText_AgendaTitle[] = _("TRAINER AGENDA");
 static const u8 sText_FooterMain[] = _("A: ACTION  B: EXIT  SELECT: DIAG");
@@ -167,6 +176,8 @@ static const u8 sText_IncomingBattle[] = _("Battle request. Accept?");
 static const u8 sText_IncomingTrade[] = _("Trade request. Accept?");
 static const u8 sText_RomMismatch[] = _("Partner ROM is a different version.");
 static const u8 sText_RequestDeclined[] = _("The other TRAINER declined.");
+static const u8 sText_NeedTwoMons[] = _("NEED 2 POKéMON TO TRADE.");
+static const u8 sText_CantEnigma[] = _("CAN'T TRADE ENIGMA BERRY.");
 static const u8 sText_ActionBattle[] = _("BATTLE");
 static const u8 sText_ActionTrade[] = _("TRADE");
 static const u8 sText_ActionRemove[] = _("REMOVE");
@@ -495,9 +506,9 @@ void Phone_UpdateConnector(void)
         Phone_ClearOnlinePeers();
 }
 
-static bool8 MapIsCableClubRoom(void)
+static bool8 WarpIsCableClubRoom(s8 mapGroup, s8 mapNum)
 {
-    u16 map = gSaveBlock1Ptr->location.mapNum | (gSaveBlock1Ptr->location.mapGroup << 8);
+    u16 map = (mapNum & 0xFF) | ((mapGroup & 0xFF) << 8);
 
     return map == MAP_TRADE_CENTER
         || map == MAP_BATTLE_COLOSSEUM_2P
@@ -505,6 +516,32 @@ static bool8 MapIsCableClubRoom(void)
         || map == MAP_UNION_ROOM
         || map == MAP_RECORD_CORNER
         || map == MAP_TWO_ISLAND_JOYFUL_GAME_CORNER;
+}
+
+static bool8 MapIsCableClubRoom(void)
+{
+    return WarpIsCableClubRoom(gSaveBlock1Ptr->location.mapGroup, gSaveBlock1Ptr->location.mapNum);
+}
+
+// Link maps live in group 0 starting at (0,0)=Colosseum. A never-written
+// dynamicWarp is all zeros, so a vanilla trade-save continue warp would dump
+// the player in the Colosseum after an overworld trade.
+void Phone_IgnoreContinueWarpIntoClub(void)
+{
+    if (!UseContinueGameWarp())
+        return;
+    if (!WarpIsCableClubRoom(gSaveBlock1Ptr->continueGameWarp.mapGroup,
+                             gSaveBlock1Ptr->continueGameWarp.mapNum))
+        return;
+    ClearContinueGameWarpStatus();
+}
+
+void Phone_CommitOverworldReturn(void)
+{
+    Phone_SaveReturnWarp();
+    ClearContinueGameWarpStatus();
+    Phone_OnClubLinkupEnd();
+    TrySavingData(SAVE_NORMAL);
 }
 
 // VAR_CABLE_CLUB_STATE lives in the save. A failed club warp can leave it
@@ -527,6 +564,7 @@ static void Phone_RepairStaleClubState(void)
 void Phone_OnClubLinkupEnd(void)
 {
     sPhoneClubBusy = FALSE;
+    sPhoneStayOnField = FALSE;
     sPendingPhoneActivity = PHONE_PENDING_NONE;
     sOutgoingKind = 0;
     sIncomingKind = 0;
@@ -540,6 +578,60 @@ void Phone_OnClubLinkupEnd(void)
 bool8 Phone_IsClubSessionActive(void)
 {
     return sPhoneClubBusy;
+}
+
+bool8 Phone_ShouldReturnToCurrentField(void)
+{
+    return sPhoneStayOnField;
+}
+
+static bool8 Phone_PartyCanTrade(void)
+{
+    if (CalculatePlayerPartyCount() < 2)
+        return FALSE;
+    if (DoesPartyHaveEnigmaBerry() == TRUE)
+        return FALSE;
+    return TRUE;
+}
+
+static const u8 *Phone_TradeBlockReason(void)
+{
+    if (CalculatePlayerPartyCount() < 2)
+        return sText_NeedTwoMons;
+    return sText_CantEnigma;
+}
+
+void Phone_StartOverworldTrade(void)
+{
+    Phone_EnterOverworldTrade();
+}
+
+static void Phone_EnterOverworldTrade(void)
+{
+    sPhoneStayOnField = TRUE;
+    sPhoneClubBusy = TRUE;
+    sPendingPhoneActivity = PHONE_PENDING_NONE;
+    sOutgoingKind = 0;
+    sIncomingKind = 0;
+    sWaitingReply = FALSE;
+
+    if (LinkSession_IsHandoffReady())
+        LinkSession_BeginHandoff();
+
+    Phone_SaveReturnWarp();
+
+    gSpecialVar_0x8004 = USING_TRADE_CENTER;
+    gLinkType = LINKTYPE_TRADE_SETUP;
+    gBattleTypeFlags = 0;
+    gFieldLinkPlayerCount = GetLinkPlayerCount_2();
+    gLocalLinkPlayerId = GetMultiplayerId();
+    if (gFieldLinkPlayerCount >= 2)
+        SaveLinkPlayers(gFieldLinkPlayerCount);
+
+    SetSuppressLinkErrorMessage(TRUE);
+    HelpSystem_Disable();
+    SetMainCallback1(CB1_Overworld);
+    SetMainCallback2(CB2_StartCreateTradeMenu);
 }
 
 void Phone_SaveReturnWarp(void)
@@ -578,9 +670,12 @@ void Phone_TryStartPendingLinkup(void)
         return;
 
     if (sPendingPhoneActivity == PHONE_PENDING_TRADE)
-        ScriptContext_SetupScript(EventScript_PhoneTryTrade);
-    else
-        ScriptContext_SetupScript(EventScript_PhoneTryBattle);
+    {
+        sPendingPhoneActivity = PHONE_PENDING_NONE;
+        Phone_EnterOverworldTrade();
+        return;
+    }
+    ScriptContext_SetupScript(EventScript_PhoneTryBattle);
     sPendingPhoneActivity = PHONE_PENDING_NONE;
 }
 
@@ -1114,7 +1209,17 @@ static void Phone_HandleActionMenu(u8 taskId)
 
     PlaySE(SE_SELECT);
     if (input == PHONE_ACTION_TRADE)
+    {
+        if (!Phone_PartyCanTrade())
+        {
+            PlaySE(SE_BOO);
+            Phone_DestroyActionWindow();
+            sAgenda->uiState = AGENDA_STATE_DECLINED;
+            Phone_PrintFooter(Phone_TradeBlockReason());
+            return;
+        }
         kind = PHONE_MSG_TRADE;
+    }
     else
         kind = PHONE_MSG_BATTLE;
     if (!Phone_TrySendMsg(kind))
@@ -1139,7 +1244,7 @@ static void Phone_BeginIncomingPrompt(void)
 
 static void Phone_HandleIncomingConfirm(u8 taskId)
 {
-    s8 input = Menu_ProcessInputNoWrapClearOnChoose();
+    s8 input = Menu_ProcessInputNoWrapAround();
 
     if (input == MENU_NOTHING_CHOSEN)
         return;
@@ -1147,11 +1252,21 @@ static void Phone_HandleIncomingConfirm(u8 taskId)
     if (input == 0)
     {
         PlaySE(SE_SELECT);
+        if (sIncomingKind == PHONE_MSG_TRADE && !Phone_PartyCanTrade())
+        {
+            PlaySE(SE_BOO);
+            DestroyYesNoMenu();
+            sIncomingKind = 0;
+            sAgenda->uiState = AGENDA_STATE_DECLINED;
+            Phone_PrintFooter(Phone_TradeBlockReason());
+            return;
+        }
         if (!Phone_TrySendMsg(PHONE_MSG_ACCEPT))
         {
             PlaySE(SE_BOO);
             return;
         }
+        DestroyYesNoMenu();
         sPendingPhoneActivity = (sIncomingKind == PHONE_MSG_TRADE) ? PHONE_PENDING_TRADE : PHONE_PENDING_BATTLE;
         sIncomingKind = 0;
         sFlushDelay = 0;
@@ -1160,7 +1275,12 @@ static void Phone_HandleIncomingConfirm(u8 taskId)
     else
     {
         PlaySE(SE_SELECT);
-        Phone_TrySendMsg(PHONE_MSG_DECLINE);
+        if (!Phone_TrySendMsg(PHONE_MSG_DECLINE))
+        {
+            PlaySE(SE_BOO);
+            return;
+        }
+        DestroyYesNoMenu();
         sIncomingKind = 0;
         sAgenda->uiState = AGENDA_STATE_MAIN;
         Phone_PrintFooter(sText_FooterMain);
@@ -1184,6 +1304,15 @@ static void Phone_HandleFlushAccept(u8 taskId)
     {
         gSpecialVar_0x8004 = USING_SINGLE_BATTLE;
         linkType = LINKTYPE_SINGLE_BATTLE;
+    }
+
+    if (sPendingPhoneActivity == PHONE_PENDING_TRADE && !Phone_PartyCanTrade())
+    {
+        LinkSession_CancelHandoff();
+        sPendingPhoneActivity = PHONE_PENDING_NONE;
+        sAgenda->uiState = AGENDA_STATE_DECLINED;
+        Phone_PrintFooter(Phone_TradeBlockReason());
+        return;
     }
 
     if (!LinkSession_IsHandoffPending() && !LinkSession_IsHandoffReady())
@@ -1363,7 +1492,8 @@ static void Task_PhoneAgenda(u8 taskId)
      && sAgenda->uiState != AGENDA_STATE_WAIT_REPLY
      && sAgenda->uiState != AGENDA_STATE_FLUSH_ACCEPT)
     {
-        Phone_QueueClubActivity(taskId, sPendingPhoneActivity);
+        sFlushDelay = 0;
+        sAgenda->uiState = AGENDA_STATE_FLUSH_ACCEPT;
         return;
     }
 
@@ -1479,12 +1609,14 @@ static void Task_ClosePhoneAgenda(u8 taskId)
     // takes the cable-club path (WIN0 black bar) and never runs DoCB1_Overworld,
     // so the Colosseum/Trade handshake never starts.
     SetMainCallback1(CB1_Overworld);
-    if (sPendingPhoneActivity != PHONE_PENDING_NONE)
+    if (sPendingPhoneActivity == PHONE_PENDING_TRADE)
     {
-        if (sPendingPhoneActivity == PHONE_PENDING_TRADE)
-            ScriptContext_SetupScript(EventScript_PhoneTryTrade);
-        else
-            ScriptContext_SetupScript(EventScript_PhoneTryBattle);
+        sPendingPhoneActivity = PHONE_PENDING_NONE;
+        Phone_EnterOverworldTrade();
+    }
+    else if (sPendingPhoneActivity != PHONE_PENDING_NONE)
+    {
+        ScriptContext_SetupScript(EventScript_PhoneTryBattle);
         sPendingPhoneActivity = PHONE_PENDING_NONE;
         gFieldCallback = Phone_FieldCB_ReturnForLinkup;
         SetMainCallback2(CB2_ReturnToField);

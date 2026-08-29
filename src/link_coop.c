@@ -10,7 +10,7 @@
 #include "random.h"
 #include "constants/maps.h"
 
-#define PRESENCE_INTERVAL 8
+#define PRESENCE_INTERVAL 24
 
 struct LinkPresence
 {
@@ -106,6 +106,11 @@ void LinkCoop_Update(void)
     if (++sCoop.sendTimer < PRESENCE_INTERVAL)
         return;
     sCoop.sendTimer = 0;
+
+    // Presence yields the single SendBlock to control/app (trade request,
+    // accept, ARRIVED). Sending here would make those retries look like mash.
+    if (LinkProto_HasPendingSend() || !IsLinkTaskFinished())
+        return;
 
     PlayerGetDestCoords(&x, &y);
     memset(&msg, 0, sizeof(msg));

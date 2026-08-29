@@ -1658,6 +1658,17 @@ void CB2_ReturnToFieldFromMultiplayer(void)
     if (Phone_IsClubSessionActive())
     {
         SetSuppressLinkErrorMessage(TRUE);
+        if (Phone_ShouldReturnToCurrentField())
+        {
+            Phone_CommitOverworldReturn();
+            ScriptContext_Init();
+            UnlockPlayerFieldControls();
+            gFieldCallback = FieldCB_WarpExitFadeFromBlack;
+            // ReturnToFieldLocal skips tileset DMA wait and InitObjectEventsLocal,
+            // so VRAM still holds the trade screen and leftover link sprites.
+            SetMainCallback2(CB2_LoadMap);
+            return;
+        }
         Phone_OnClubLinkupEnd();
         SetMainCallback1(CB1_Overworld);
         SetWarpDestinationToDynamicWarp(WARP_ID_DYNAMIC);
@@ -1731,6 +1742,7 @@ void CB2_ContinueSavedGame(void)
     UnlockPlayerFieldControls();
     gFieldCallback2 = NULL;
     gExitStairsMovementDisabled = TRUE;
+    Phone_IgnoreContinueWarpIntoClub();
     if (UseContinueGameWarp() == TRUE)
     {
         ClearContinueGameWarpStatus();
@@ -2374,6 +2386,7 @@ void CB2_EnterFieldFromQuestLog(void)
     PlayTimeCounter_Start();
     ScriptContext_Init();
     gExitStairsMovementDisabled = TRUE;
+    Phone_IgnoreContinueWarpIntoClub();
     if (UseContinueGameWarp() == TRUE)
     {
         ClearContinueGameWarpStatus();

@@ -854,6 +854,15 @@ static void CB2_CreateTradeMenu(void)
         PrintTradeMessage(MSG_STANDBY);
         ShowBg(0);
 
+        if (Phone_IsClubSessionActive() && !gReceivedRemoteLinkPlayers)
+        {
+            Free(sMenuTextTileBuffer);
+            FreeAllWindowBuffers();
+            Free(sTradeMenu);
+            SetMainCallback2(CB2_ReturnToFieldFromMultiplayer);
+            break;
+        }
+
         if (!gReceivedRemoteLinkPlayers)
         {
             gLinkType = LINKTYPE_TRADE_CONNECTING;
@@ -868,8 +877,6 @@ static void CB2_CreateTradeMenu(void)
             else
             {
                 OpenLink();
-                if (Phone_IsClubSessionActive())
-                    SetSuppressLinkErrorMessage(TRUE);
                 gMain.state++;
             }
             if (gWirelessCommType == 0)
@@ -1312,6 +1319,10 @@ static void CB_WaitToStartTrade(void)
         {
             sTradeMenu->callbackId = CB_WAIT_TO_START_RFU_TRADE;
         }
+        else if (Phone_IsClubSessionActive())
+        {
+            sTradeMenu->callbackId = CB_START_LINK_TRADE;
+        }
         else
         {
             SetCloseLinkCallbackAndType(32);
@@ -1322,10 +1333,7 @@ static void CB_WaitToStartTrade(void)
 
 static void CB_StartLinkTrade(void)
 {
-    if (Phone_IsClubSessionActive())
-        gMain.savedCallback = CB2_ReturnToFieldFromMultiplayer;
-    else
-        gMain.savedCallback = CB2_StartCreateTradeMenu;
+    gMain.savedCallback = CB2_StartCreateTradeMenu;
     if (gWirelessCommType != 0)
     {
         // Wireless Link Trade
@@ -1342,7 +1350,7 @@ static void CB_StartLinkTrade(void)
     else
     {
         // Cable Link Trade
-        if (!gReceivedRemoteLinkPlayers)
+        if (Phone_IsClubSessionActive() || !gReceivedRemoteLinkPlayers)
         {
             Free(sMenuTextTileBuffer);
             FreeAllWindowBuffers();
@@ -2130,7 +2138,7 @@ static void CB_InitExitCanceledTrade(void)
     {
         if (gWirelessCommType)
             SetLinkStandbyCallback();
-        else
+        else if (!Phone_IsClubSessionActive())
             SetCloseLinkCallbackAndType(12);
 
         sTradeMenu->callbackId = CB_EXIT_CANCELED_TRADE;
@@ -2152,7 +2160,7 @@ static void CB_ExitCanceledTrade(void)
     }
     else
     {
-        if (!gReceivedRemoteLinkPlayers)
+        if (Phone_IsClubSessionActive() || !gReceivedRemoteLinkPlayers)
         {
             Free(sMenuTextTileBuffer);
             Free(sTradeMenu);

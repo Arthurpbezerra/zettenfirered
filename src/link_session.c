@@ -99,7 +99,9 @@ static void OnControlPacket(u8 playerId, const u8 *payload, u8 len)
     }
     if (msg->cmd == CTRL_ARRIVED)
     {
-        if (sSession.state == LINK_SESSION_HANDOFF)
+        if (sSession.state == LINK_SESSION_ESTABLISHED
+         || sSession.state == LINK_SESSION_BARRIER
+         || sSession.state == LINK_SESSION_HANDOFF)
             sSession.peerArrived = TRUE;
         return;
     }
@@ -266,6 +268,8 @@ void LinkSession_RequestHandoff(u16 linkType)
         sSession.peerHandoffAck = TRUE;
     else
         sSession.peerHandoffAck = FALSE;
+    sSession.arrivedSent = FALSE;
+    sSession.arriveRetry = 0;
 }
 
 bool8 LinkSession_IsHandoffPending(void)
@@ -284,7 +288,7 @@ void LinkSession_BeginHandoff(void)
         return;
     sSession.state = LINK_SESSION_HANDOFF;
     sSession.timer = 0;
-    sSession.peerArrived = FALSE;
+    // Keep peerArrived: the partner may already be in the club room.
     sSession.arrivedSent = FALSE;
     sSession.arriveRetry = 0;
 }
