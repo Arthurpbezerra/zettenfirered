@@ -77,6 +77,7 @@ static void CopyObjectGraphicsInfoToSpriteTemplate_WithMovementType(u16, u16, st
 static void GetObjectEventMovingCameraOffset(s16 *, s16 *);
 static const struct ObjectEventTemplate *GetObjectEventTemplateByLocalIdAndMap(u8, u8, u8);
 static void LoadObjectEventPalette(u16);
+static void LoadObjectEventPaletteIntoSlot(u16, u8);
 static void RemoveObjectEventIfOutsideView(struct ObjectEvent *);
 static void SpawnObjectEventOnReturnToField(u8 objectEventId, s16 x, s16 y);
 static void SetPlayerAvatarObjectEventIdAndObjectId(u8, u8);
@@ -1820,7 +1821,7 @@ u8 CreateObjectGraphicsSprite(u16 graphicsId, SpriteCallback callback, s16 x, s1
         spriteTemplate.paletteTag = GetSpritePaletteTagByPaletteNum(paletteNum);
     }
     else if (spriteTemplate.paletteTag != TAG_NONE)
-        LoadObjectEventPalette(spriteTemplate.paletteTag);
+        LoadObjectEventPaletteIntoSlot(spriteTemplate.paletteTag, GetObjectEventGraphicsInfo(graphicsId)->paletteSlot);
 
 #if OW_GFX_COMPRESS
     {
@@ -2028,7 +2029,7 @@ static void SpawnObjectEventOnReturnToField(u8 objectEventId, s16 x, s16 y)
     spriteTemplate.tileTag = LoadSheetGraphicsInfo(graphicsInfo, objectEvent->graphicsId, NULL);
 #endif
     if (spriteTemplate.paletteTag != TAG_NONE && spriteTemplate.paletteTag != OBJ_EVENT_PAL_TAG_DYNAMIC)
-        LoadObjectEventPalette(spriteTemplate.paletteTag);
+        LoadObjectEventPaletteIntoSlot(spriteTemplate.paletteTag, graphicsInfo->paletteSlot);
 
     i = CreateSprite(&spriteTemplate, 0, 0, 0);
     if (i != MAX_SPRITES)
@@ -2299,6 +2300,19 @@ static void LoadObjectEventPalette(u16 paletteTag)
     {
         TryLoadObjectPalette(&sObjectEventSpritePalettes[i]);
     }
+}
+
+// Reserved slots 0-11 already hold the standard NPC/player set from
+// InitObjectEventPalettes. Loading those tags again allocates slots 12-15
+// (field effects / follower) and the next grass step reads the player pal.
+static void LoadObjectEventPaletteIntoSlot(u16 paletteTag, u8 paletteSlot)
+{
+    if (paletteTag == TAG_NONE || paletteTag == OBJ_EVENT_PAL_TAG_DYNAMIC)
+        return;
+    if (paletteSlot >= OBJ_PALSLOT_COUNT)
+        LoadObjectEventPalette(paletteTag);
+    else if (paletteTag != GetObjectPaletteTag(paletteSlot))
+        PatchObjectPalette(paletteTag, paletteSlot);
 }
 
 // Unused

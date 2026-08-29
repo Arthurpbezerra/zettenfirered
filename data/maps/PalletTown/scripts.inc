@@ -451,6 +451,21 @@ PalletTown_EventScript_Arthorios_TransferredToPC::
 PalletTown_EventScript_Arthorios_EndGiveMon::
 	release
 	end
+
+PalletTown_EventScript_Gigi::
+	msgbox PalletTown_Text_Gigi, MSGBOX_NPC
+	end
+
+PalletTown_EventScript_GigiMew::
+	lock
+	faceplayer
+	waitse
+	playmoncry SPECIES_MEW, CRY_MODE_NORMAL
+	msgbox PalletTown_Text_Mew
+	waitmoncry
+	release
+	end
+
 PalletTown_EventScript_OaksLabSign::
 	lockall
 	famechecker FAMECHECKER_OAK, 0

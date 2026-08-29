@@ -7,10 +7,11 @@
 #include "link_proto.h"
 #include "link_session.h"
 #include "overworld.h"
-#include "random.h"
+#include "pokemon.h"
 #include "constants/maps.h"
 
 #define PRESENCE_INTERVAL 24
+#define PRESENCE_TIMEOUT 90
 
 struct LinkPresence
 {
@@ -20,7 +21,7 @@ struct LinkPresence
     u8 gender;
     s16 x;
     s16 y;
-    u32 rng;
+    u32 rng; // reserved; RNG re-sync is Fase F
 };
 
 STATIC_ASSERT(sizeof(struct LinkPresence) <= LINK_PROTO_MAX_PAYLOAD, LinkPresenceFits);
@@ -30,7 +31,7 @@ struct LinkCoopCtx
     struct LinkPresence peer;
     u8 peerPlayerId;
     bool8 havePeer;
-    bool8 rngSynced;
+    u8 lastSeen;
     u8 sendTimer;
 };
 
@@ -43,15 +44,20 @@ static bool8 MapIsWhitelisted(u8 mapGroup, u8 mapNum)
     return map == MAP_PALLET_TOWN || map == MAP_ROUTE1;
 }
 
-static bool8 PresenceLooksSane(const struct LinkPresence *msg)
+static bool8 PresenceFieldsSane(const struct LinkPresence *msg)
 {
-    s32 width;
-    s32 height;
-
     if (msg->direction < DIR_SOUTH || msg->direction > DIR_EAST)
         return FALSE;
     if (msg->gender > FEMALE)
         return FALSE;
+    return TRUE;
+}
+
+static bool8 PresenceCoordsOnLocalMap(const struct LinkPresence *msg)
+{
+    s32 width;
+    s32 height;
+
     if (gMapHeader.mapLayout == NULL)
         return FALSE;
     width = gMapHeader.mapLayout->width;
@@ -72,17 +78,12 @@ static void OnPresence(u8 playerId, const u8 *payload, u8 len)
     msg = (const struct LinkPresence *)payload;
     if (playerId >= MAX_LINK_PLAYERS)
         return;
-    if (!PresenceLooksSane(msg))
+    if (!PresenceFieldsSane(msg))
         return;
     sCoop.peer = *msg;
     sCoop.peerPlayerId = playerId;
     sCoop.havePeer = TRUE;
-
-    if (!sCoop.rngSynced && !IsLinkMaster())
-    {
-        gRngValue = msg->rng;
-        sCoop.rngSynced = TRUE;
-    }
+    sCoop.lastSeen = 0;
 }
 
 void LinkCoop_Reset(void)
@@ -103,14 +104,23 @@ void LinkCoop_Update(void)
         return;
     }
 
+    if (sCoop.havePeer)
+    {
+        if (sCoop.lastSeen < 255)
+            sCoop.lastSeen++;
+        if (sCoop.lastSeen >= PRESENCE_TIMEOUT)
+            sCoop.havePeer = FALSE;
+    }
+
     if (++sCoop.sendTimer < PRESENCE_INTERVAL)
         return;
-    sCoop.sendTimer = 0;
 
     // Presence yields the single SendBlock to control/app (trade request,
-    // accept, ARRIVED). Sending here would make those retries look like mash.
+    // accept, ARRIVED). Keep sendTimer due so the next idle frame retries.
     if (LinkProto_HasPendingSend() || !IsLinkTaskFinished())
         return;
+
+    sCoop.sendTimer = 0;
 
     PlayerGetDestCoords(&x, &y);
     memset(&msg, 0, sizeof(msg));
@@ -120,16 +130,14 @@ void LinkCoop_Update(void)
     msg.gender = gSaveBlock2Ptr->playerGender;
     msg.x = x;
     msg.y = y;
-    msg.rng = gRngValue;
     LinkProto_Send(LINK_CHAN_PRESENCE, &msg, sizeof(msg));
-
-    if (IsLinkMaster())
-        sCoop.rngSynced = TRUE;
 }
 
 bool8 LinkCoop_IsActive(void)
 {
     if (!LinkSession_IsEstablished() || !sCoop.havePeer)
+        return FALSE;
+    if (CalculatePlayerPartyCount() < 1)
         return FALSE;
     if (!MapIsWhitelisted(gSaveBlock1Ptr->location.mapGroup, gSaveBlock1Ptr->location.mapNum))
         return FALSE;
@@ -150,7 +158,7 @@ bool8 LinkCoop_GetPeerPose(u8 *playerId, s16 *x, s16 *y, u8 *direction, u8 *gend
         return FALSE;
     if (sCoop.peerPlayerId >= MAX_LINK_PLAYERS)
         return FALSE;
-    if (!PresenceLooksSane(&sCoop.peer))
+    if (!PresenceCoordsOnLocalMap(&sCoop.peer))
         return FALSE;
     *playerId = sCoop.peerPlayerId;
     *x = sCoop.peer.x;

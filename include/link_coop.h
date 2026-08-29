@@ -4,8 +4,9 @@
 #include "global.h"
 
 // Overworld co-op v1: presence on a whitelist of maps. Wild encounters and
-// NPC scripts stay off while both players share a listed map. The remote
-// avatar is drawn by overworld.c from this pose; no extra EWRAM buffers.
+// NPC scripts stay off while both players share a listed map and the local
+// party has at least one Pokémon. Stale presence expires after ~1.5s. The
+// remote avatar is drawn by overworld.c from this pose.
 
 void LinkCoop_Reset(void);
 void LinkCoop_Update(void);

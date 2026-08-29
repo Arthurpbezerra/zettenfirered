@@ -181,14 +181,19 @@ static u8 LoadDynamicFollowerPalette(u16 species, u8 form, bool32 shiny)
     u32 paletteNum;
     struct SpritePalette spritePalette = {.tag = shiny ? (species + SPECIES_SHINY_TAG) : species};
 
-    if ((paletteNum = IndexOfSpritePaletteTag(spritePalette.tag)) != 0xFF)
-        return paletteNum;
-
     spritePalette.data = (u16 *)((shiny ? gMonShinyPaletteTable : gMonPaletteTable)[species].data);
     if (IsLZ77Data(spritePalette.data, PLTT_SIZE_4BPP, PLTT_SIZE_4BPP))
     {
         LZ77UnCompWram((const u32 *)spritePalette.data, gDecompressionBuffer);
         spritePalette.data = (void *)gDecompressionBuffer;
+    }
+
+    paletteNum = IndexOfSpritePaletteTag(spritePalette.tag);
+    if (paletteNum != 0xFF)
+    {
+        LoadPalette(spritePalette.data, OBJ_PLTT_ID(paletteNum), PLTT_SIZE_4BPP);
+        UpdateSpritePaletteWithWeather(paletteNum);
+        return paletteNum;
     }
 
     paletteNum = LoadSpritePalette(&spritePalette);

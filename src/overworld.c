@@ -21,6 +21,7 @@
 #include "heal_location.h"
 #include "help_system.h"
 #include "link.h"
+#include "link_session.h"
 #include "link_rfu.h"
 #include "load_save.h"
 #include "m4a.h"
@@ -128,6 +129,7 @@ static bool8 sReceivingFromLink;
 static u8 sRfuKeepAliveTimer;
 static bool8 sCoopAvatarSpawned;
 static u8 sCoopAvatarId;
+static u8 sCoopSpawnRetry;
 
 static u8 CountBadgesForOverworldWhiteOutLossCalculation(void);
 static void Overworld_ResetStateAfterWhitingOut(void);
@@ -1624,7 +1626,13 @@ static void CB2_LoadMapOnReturnToFieldCableClub(void)
 void CB2_ReturnToField(void)
 {
     gMain.state = 0;
-    if (IsUpdateLinkStateCBActive() == TRUE)
+    // Cable Club return uses link palettes and CreateLinkPlayerSprites.
+    // The Connector keeps the serial up on the field; that must not take
+    // this path or grass/follower OBJ pals stay as leftover battle colors.
+    if (IsUpdateLinkStateCBActive() == TRUE
+     && !Phone_IsClubSessionActive()
+     && !LinkSession_IsEstablished()
+     && !LinkSession_IsEnabled())
     {
         SetMainCallback2(CB2_ReturnToFieldLink);
     }
@@ -2191,6 +2199,7 @@ static void InitObjectEventsLocal(void)
     ClearLinkPlayerObjectEvents();
     sCoopAvatarSpawned = FALSE;
     sCoopAvatarId = 0;
+    sCoopSpawnRetry = 0;
     GetCameraFocusCoords(&x, &y);
     player = GetInitialPlayerAvatarState();
     InitPlayerAvatar(x, y, player->direction, gSaveBlock2Ptr->playerGender);
@@ -3347,9 +3356,18 @@ static void ZeroObjectEvent(struct ObjectEvent *objEvent)
 
 static void SpawnLinkPlayerObjectEvent(u8 linkPlayerId, s16 x, s16 y, u8 gender)
 {
-    u8 objEventId = GetFirstInactiveObjectEventId();
-    struct LinkPlayerObjectEvent *linkPlayerObjEvent = &gLinkPlayerObjectEvents[linkPlayerId];
-    struct ObjectEvent *objEvent = &gObjectEvents[objEventId];
+    u8 objEventId;
+    struct LinkPlayerObjectEvent *linkPlayerObjEvent;
+    struct ObjectEvent *objEvent;
+
+    if (linkPlayerId >= MAX_LINK_PLAYERS)
+        return;
+    objEventId = GetFirstInactiveObjectEventId();
+    if (objEventId >= OBJECT_EVENTS_COUNT)
+        return;
+
+    linkPlayerObjEvent = &gLinkPlayerObjectEvents[linkPlayerId];
+    objEvent = &gObjectEvents[objEventId];
 
     ZeroLinkPlayerObjectEvent(linkPlayerObjEvent);
     ZeroObjectEvent(objEvent);
@@ -3380,23 +3398,41 @@ static void InitLinkPlayerObjectEventPos(struct ObjectEvent *objEvent, s16 x, s1
 
 static void SetLinkPlayerObjectRange(u8 linkPlayerId, u8 dir)
 {
-    if (gLinkPlayerObjectEvents[linkPlayerId].active)
-    {
-        u8 objEventId = gLinkPlayerObjectEvents[linkPlayerId].objEventId;
-        struct ObjectEvent *objEvent = &gObjectEvents[objEventId];
-        linkDirection(objEvent) = dir;
-    }
+    u8 objEventId;
+    struct ObjectEvent *objEvent;
+
+    if (linkPlayerId >= MAX_LINK_PLAYERS)
+        return;
+    if (!gLinkPlayerObjectEvents[linkPlayerId].active)
+        return;
+    objEventId = gLinkPlayerObjectEvents[linkPlayerId].objEventId;
+    if (objEventId >= OBJECT_EVENTS_COUNT)
+        return;
+    objEvent = &gObjectEvents[objEventId];
+    linkDirection(objEvent) = dir;
 }
 
 static void DestroyLinkPlayerObject(u8 linkPlayerId)
 {
-    struct LinkPlayerObjectEvent *linkPlayerObjEvent = &gLinkPlayerObjectEvents[linkPlayerId];
-    u8 objEventId = linkPlayerObjEvent->objEventId;
-    struct ObjectEvent *objEvent = &gObjectEvents[objEventId];
-    if (objEvent->spriteId != MAX_SPRITES)
-        DestroySprite(&gSprites[objEvent->spriteId]);
+    struct LinkPlayerObjectEvent *linkPlayerObjEvent;
+    u8 objEventId;
+    struct ObjectEvent *objEvent;
+
+    if (linkPlayerId >= MAX_LINK_PLAYERS)
+        return;
+    linkPlayerObjEvent = &gLinkPlayerObjectEvents[linkPlayerId];
+    if (!linkPlayerObjEvent->active)
+        return;
+    objEventId = linkPlayerObjEvent->objEventId;
+    if (objEventId < OBJECT_EVENTS_COUNT)
+    {
+        objEvent = &gObjectEvents[objEventId];
+        if (objEvent->spriteId < MAX_SPRITES)
+            DestroySprite(&gSprites[objEvent->spriteId]);
+        objEvent->active = FALSE;
+        objEvent->spriteId = MAX_SPRITES;
+    }
     linkPlayerObjEvent->active = FALSE;
-    objEvent->active = FALSE;
 }
 
 // Returns the spriteId corresponding to this player.
@@ -3585,29 +3621,50 @@ static bool8 LinkPlayerDetectCollision(u8 selfObjEventId, u8 a2, s16 x, s16 y)
 
 static void CreateLinkPlayerSprite(u8 linkPlayerId, u8 gameVersion)
 {
-    struct LinkPlayerObjectEvent *linkPlayerObjEvent = &gLinkPlayerObjectEvents[linkPlayerId];
-    u8 objEventId = linkPlayerObjEvent->objEventId;
-    struct ObjectEvent *objEvent = &gObjectEvents[objEventId];
+    struct LinkPlayerObjectEvent *linkPlayerObjEvent;
+    u8 objEventId;
+    struct ObjectEvent *objEvent;
     struct Sprite *sprite;
+    u8 spriteId;
 
-    if (linkPlayerObjEvent->active)
+    if (linkPlayerId >= MAX_LINK_PLAYERS)
+        return;
+    linkPlayerObjEvent = &gLinkPlayerObjectEvents[linkPlayerId];
+    if (!linkPlayerObjEvent->active)
+        return;
+
+    objEventId = linkPlayerObjEvent->objEventId;
+    if (objEventId >= OBJECT_EVENTS_COUNT)
     {
-        if (gameVersion == VERSION_FIRE_RED || gameVersion == VERSION_LEAF_GREEN)
-        {
-            objEvent->spriteId = CreateObjectGraphicsSprite(
-                GetRivalAvatarGraphicsIdByStateIdAndGender(PLAYER_AVATAR_STATE_NORMAL, linkGender(objEvent)),
-                SpriteCB_LinkPlayer, 0, 0, 0);
-        }
-        else
-        {
-            objEvent->spriteId = CreateObjectGraphicsSprite(GetRSAvatarGraphicsIdByGender(linkGender(objEvent)), SpriteCB_LinkPlayer, 0, 0, 0);
-        }
-
-        sprite = &gSprites[objEvent->spriteId];
-        sprite->coordOffsetEnabled = TRUE;
-        sprite->data[0] = linkPlayerId;
-        objEvent->triggerGroundEffectsOnMove = FALSE;
+        ZeroLinkPlayerObjectEvent(linkPlayerObjEvent);
+        return;
     }
+
+    objEvent = &gObjectEvents[objEventId];
+    if (gameVersion == VERSION_FIRE_RED || gameVersion == VERSION_LEAF_GREEN)
+    {
+        spriteId = CreateObjectGraphicsSprite(
+            GetRivalAvatarGraphicsIdByStateIdAndGender(PLAYER_AVATAR_STATE_NORMAL, linkGender(objEvent)),
+            SpriteCB_LinkPlayer, 0, 0, 0);
+    }
+    else
+    {
+        spriteId = CreateObjectGraphicsSprite(GetRSAvatarGraphicsIdByGender(linkGender(objEvent)), SpriteCB_LinkPlayer, 0, 0, 0);
+    }
+
+    objEvent->spriteId = spriteId;
+    if (spriteId >= MAX_SPRITES)
+    {
+        objEvent->active = FALSE;
+        objEvent->spriteId = MAX_SPRITES;
+        ZeroLinkPlayerObjectEvent(linkPlayerObjEvent);
+        return;
+    }
+
+    sprite = &gSprites[spriteId];
+    sprite->coordOffsetEnabled = TRUE;
+    sprite->data[0] = linkPlayerId;
+    objEvent->triggerGroundEffectsOnMove = FALSE;
 }
 
 static void SpriteCB_LinkPlayer(struct Sprite *sprite)
@@ -3670,12 +3727,29 @@ static bool8 CoopLinkAvatarIsLive(u8 playerId)
     return TRUE;
 }
 
+#define COOP_SPAWN_RETRY_FRAMES 30
+
 static void CoopDiscardStaleAvatar(u8 playerId)
 {
-    if (CoopLinkAvatarIsLive(playerId))
-        DestroyLinkPlayerObject(playerId);
-    else if (playerId < MAX_LINK_PLAYERS)
-        ZeroLinkPlayerObjectEvent(&gLinkPlayerObjectEvents[playerId]);
+    u8 objEventId;
+    struct ObjectEvent *objEvent;
+
+    if (playerId >= MAX_LINK_PLAYERS)
+        return;
+    if (gLinkPlayerObjectEvents[playerId].active)
+    {
+        objEventId = gLinkPlayerObjectEvents[playerId].objEventId;
+        if (objEventId < OBJECT_EVENTS_COUNT)
+        {
+            objEvent = &gObjectEvents[objEventId];
+            if (objEvent->spriteId < MAX_SPRITES
+             && gSprites[objEvent->spriteId].callback == SpriteCB_LinkPlayer)
+                DestroySprite(&gSprites[objEvent->spriteId]);
+            objEvent->active = FALSE;
+            objEvent->spriteId = MAX_SPRITES;
+        }
+    }
+    ZeroLinkPlayerObjectEvent(&gLinkPlayerObjectEvents[playerId]);
 }
 
 void Overworld_UpdateCoopPartner(void)
@@ -3684,6 +3758,7 @@ void Overworld_UpdateCoopPartner(void)
     s16 x, y;
     u8 dir;
     u8 gender;
+    u8 objEventId;
 
     if (Phone_IsClubSessionActive())
         return;
@@ -3695,6 +3770,7 @@ void Overworld_UpdateCoopPartner(void)
             CoopDiscardStaleAvatar(sCoopAvatarId);
             sCoopAvatarSpawned = FALSE;
         }
+        sCoopSpawnRetry = 0;
         return;
     }
 
@@ -3711,21 +3787,38 @@ void Overworld_UpdateCoopPartner(void)
     {
         CoopDiscardStaleAvatar(sCoopAvatarId);
         sCoopAvatarSpawned = FALSE;
+        sCoopSpawnRetry = 0;
     }
 
     if (!CoopLinkAvatarIsLive(playerId))
     {
-        ZeroLinkPlayerObjectEvent(&gLinkPlayerObjectEvents[playerId]);
+        if (sCoopSpawnRetry != 0)
+        {
+            sCoopSpawnRetry--;
+            return;
+        }
+        CoopDiscardStaleAvatar(playerId);
         SpawnLinkPlayerObjectEvent(playerId, x, y, gender);
         CreateLinkPlayerSprite(playerId, VERSION_FIRE_RED);
-        sCoopAvatarId = playerId;
-        sCoopAvatarSpawned = TRUE;
+        if (CoopLinkAvatarIsLive(playerId))
+        {
+            sCoopAvatarId = playerId;
+            sCoopAvatarSpawned = TRUE;
+        }
+        else
+        {
+            sCoopAvatarSpawned = FALSE;
+            sCoopSpawnRetry = COOP_SPAWN_RETRY_FRAMES;
+        }
     }
     else
     {
-        InitLinkPlayerObjectEventPos(&gObjectEvents[gLinkPlayerObjectEvents[playerId].objEventId], x, y);
+        objEventId = gLinkPlayerObjectEvents[playerId].objEventId;
+        if (objEventId < OBJECT_EVENTS_COUNT)
+            InitLinkPlayerObjectEventPos(&gObjectEvents[objEventId], x, y);
         SetLinkPlayerObjectRange(playerId, dir);
         sCoopAvatarId = playerId;
         sCoopAvatarSpawned = TRUE;
+        sCoopSpawnRetry = 0;
     }
 }

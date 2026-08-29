@@ -66,19 +66,31 @@ PalletTown_Text_OakYouEnjoyingTraveling::
     .string "Hohoho.$"
 
 PalletTown_Text_ArthoriosGreeting::
-    .string "Eae seu noob, sou o Arthorios.\p"
-    .string "Bem vindo a cidade, sua jornada começa aqui!$"
+    .string "E ai, noob. Eu sou o Arthorios.\p"
+    .string "Bem-vindo a PALLET TOWN.\n"
+    .string "Sua jornada comeca aqui.$"
 
 PalletTown_Text_ArthoriosGivePhone::
-    .string "Toma esse CONECTOR e a AGENDA.\n"
-    .string "Liga o CONECTOR e abre a AGENDA.$"
+    .string "Toma este CONECTOR e esta AGENDA.\p"
+    .string "Liga o CONECTOR quando quiser\n"
+    .string "ficar online.\p"
+    .string "Depois abre a AGENDA pra ver quem\n"
+    .string "esta por perto.$"
 
 PalletTown_Text_ArthoriosChoosePokemon::
-    .string "Escolhe qualquer pokemon,tenho \n"
-    .string "TODOS KKK, mas vai ser Lv. 1, confia!$"
+    .string "Pode escolher qualquer POKéMON.\n"
+    .string "Tenho todos de Kanto.\p"
+    .string "Vai ser Nv. 1, mas e de graca.\n"
+    .string "Confia.$"
 
 PalletTown_Text_ArthoriosConfirmGive::
-    .string "You want {STR_VAR_1}?$"
+    .string "Quer o {STR_VAR_1}?$"
 
 PalletTown_Text_ArthoriosReceivedMon::
-    .string "{PLAYER} received {STR_VAR_1}!$"
+    .string "{PLAYER} recebeu {STR_VAR_1}!$"
+
+PalletTown_Text_Gigi::
+    .string "Gigi: Oi.$"
+
+PalletTown_Text_Mew::
+    .string "MEW: Mew!$"
