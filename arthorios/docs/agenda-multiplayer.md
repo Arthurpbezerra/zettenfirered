@@ -6,7 +6,7 @@ Serve como referência de **ideia**, **implementação atual**, **testes**, **bu
 Caminho alvo de teste remoto: **RetroArch 1.17+**, core **gpSP**, `Link Cable Connectivity = mul_poke`, netplay host/join.
 mGBA (duas janelas) serve para desenvolvimento local; RFU fica para a Fase G.
 
-Última atualização: **2026-08-29**.
+Última atualização: **2026-08-31**.
 
 ---
 
@@ -17,13 +17,13 @@ mGBA (duas janelas) serve para desenvolvimento local; RFU fica para a Fase G.
 | Fases 1–2 (itens, Agenda offline, save, Select) | ✅ Feito | Contatos dummy ainda presentes |
 | Fase 3 (handshake cabo, peers online) | ✅ Feito | `LinkSession` + `Phone_TryResumeLink` |
 | Fase 4 (batalha/troca pela Agenda) | ✅ Quase | Yes/No remoto via canal `app`; falta polish e testes netplay |
-| Co-op v1 (Pallet + Route 1) | 🟡 Parcial | Avatar remoto + supressão de eventos; movimento bruto |
+| Co-op v1 (presença) | ✅ Feito | Qualquer mapa; caminhada interpolada; timeout |
+| Fase F (co-op avançado, escopo reduzido) | ✅ Feito | Selvagem local; cutscene sai do passeio; aviso de área |
 | Fase 5 (RFU / scan wireless) | ⬜ Não iniciado | Fora do caminho crítico |
 | Fase 6 (polish) | ⬜ Pendente | Ícones, PT, som, follower hide |
-| Fase F (warp/encontros com host) | ⬜ Pendente | Escopo reduzido recomendado |
 | Fase G (presente, chat, RFU Agenda) | ⬜ Pendente | Opcional |
 
-**Trabalho recente (branch local, ainda não commitado em 2026-08-29):** módulos `link_session`, `link_proto`, `link_coop`, `link_diag`; refatoração grande de `phone.c`; integração em `overworld.c`, `field_control_avatar.c`, `wild_encounter.c`; entradas em `ld_script.ld` / `ld_script_rev10.ld`.
+**Trabalho recente (branch `arthorios`, 2026-08-31):** presença em todos os mapas; avatar NPC com passo `WALK_NORMAL`; colisão atravessável entre jogadores; freeze ~10 s se o peer entra em luta/script; aviso genérico ao divergir de mapa. Stack `link_*` + `phone.c` pode estar só local — **commitar** (M1).
 
 ---
 
@@ -40,7 +40,7 @@ Comportamento alvo:
 
 - Após o primeiro handshake bem-sucedido, o outro treinador é salvo automaticamente no save.
 - Com o Conector ON, a sessão persiste no overworld; batalha/troca **não** derrubam o cabo (handoff).
-- Em **Pallet Town** e **Route 1**, se os dois estiverem no mesmo mapa, o avatar remoto aparece (co-op v1).
+- Em **qualquer mapa**, se os dois estiverem no mesmo `mapGroup`/`mapNum`, o avatar remoto aparece (co-op v1). Cada save continua independente.
 - SELECT na Agenda abre **diagnóstico de link** (`LinkDiag`).
 
 ---
@@ -53,8 +53,8 @@ O stack customizado foi dividido em camadas com responsabilidades fixas. A regra
 ┌─────────────────────────────────────────────────────────────┐
 │  UI / jogo                                                  │
 │  phone.c (Agenda, pedidos batalha/troca, diagnóstico)       │
-│  overworld.c (avatar co-op, retorno pós-clube)              │
-│  field_control_avatar.c / wild_encounter.c (supressão co-op)│
+│  overworld.c (avatar co-op, interpolação, freeze)           │
+│  event_object_movement.c (atravessar o parceiro)            │
 └───────────────────────────┬─────────────────────────────────┘
                             │ LinkSession_* / LinkCoop_* / LinkProto_*
 ┌───────────────────────────▼─────────────────────────────────┐
@@ -123,8 +123,8 @@ Cabeçalho: `{ magic=0xA7E2, protoVersion=1, channel, len, seq }`, payload até 
 | Canal | Dono | Conteúdo |
 |-------|------|----------|
 | `control` | LinkSession | Handoff, arrived, cancel |
-| `presence` | LinkCoop | Posição, mapa, direção, gender, RNG |
-| `coop` | (reservado) | Futuro: warp, encontros host |
+| `presence` | LinkCoop | Mapa, pose, gender, `busy` |
+| `coop` | (reservado) | Livre; encontros host foram **descartados** |
 | `app` | Phone | Pedidos batalha/troca/accept/decline |
 
 **Política de envio:**
@@ -133,45 +133,49 @@ Cabeçalho: `{ magic=0xA7E2, protoVersion=1, channel, len, seq }`, payload até 
 - Pacotes inválidos são descartados e contados em `LinkDiag`.
 - ROM com `protoVersion` diferente → flag `LinkProto_HasVersionMismatch()` → texto *"Partner ROM is a different version."* na Agenda.
 
-### 2.3 LinkCoop — arquitetura do co-op v1
+### 2.3 LinkCoop — presença espelhada
 
-**Arquivos:** `src/link_coop.c`, `include/link_coop.h`, `src/overworld.c` (`Overworld_UpdateCoopPartner`)
+**Arquivos:** `src/link_coop.c`, `include/link_coop.h`, `src/overworld.c` (`Overworld_UpdateCoopPartner`), `data/scripts/coop.inc`
 
-O co-op v1 **não** sincroniza mundo compartilhado. É um modelo **“presença espelhada”**:
+O co-op **não** é um mundo compartilhado. É **presença espelhada** em saves independentes:
 
-1. Cada frame (quando estabelecido), `LinkCoop_Update()` registra handler do canal `presence`.
-2. A cada **24 frames** (~0,4 s), se o serial estiver livre, envia `struct LinkPresence`:
-   - `mapGroup`, `mapNum`, `direction`, `gender`, `x`, `y` (destino do passo), `rng`.
-3. O receptor valida com `PresenceLooksSane()` (direção, gender, coords dentro do layout do mapa local).
-4. `LinkCoop_IsActive()` exige:
-   - sessão estabelecida + peer conhecido;
-   - **mapa local** na whitelist (`MAP_PALLET_TOWN`, `MAP_ROUTE1`);
-   - **mapa do peer** igual ao local.
-5. `Overworld_UpdateCoopPartner()` (chamado de `DoCB1_Overworld`):
-   - lê pose via `LinkCoop_GetPeerPose()`;
-   - spawna/atualiza **um** `LinkPlayerObjectEvent` + sprite `SpriteCB_LinkPlayer`;
-   - valida coords com `CoopCoordsInMap()`;
-   - descarta avatar stale com `CoopDiscardStaleAvatar()` quando co-op desativa.
+1. `LinkCoop_Update()` (via `Phone_TryResumeLink`) registra o handler `presence`.
+2. A cada **24 frames**, se o serial estiver livre, envia `struct LinkPresence`: `mapGroup`, `mapNum`, `direction`, `gender`, `busy`, `x`, `y` (tile de destino).
+3. Receptor valida direção/gender/`busy` (`PresenceFieldsSane`) e coords no layout local (`PresenceCoordsOnLocalMap`).
+4. `LinkCoop_IsActive()` (passeio ao vivo) exige:
+   - sessão estabelecida + peer conhecido + **não** `busy`;
+   - jogador local ocioso (não em script/luta/menu; CB2 de campo);
+   - party local com ≥ 1 Pokémon;
+   - **mesmo** `mapGroup`/`mapNum` (sem whitelist).
+5. `Overworld_UpdateCoopPartner()` (depois do input de campo em `DoCB1_Overworld`):
+   - NPC `LOCALID_COOP_PARTNER` (253), `MOVEMENT_TYPE_NONE`, gfx rival;
+   - passo adjacente → `WALK_NORMAL`; mesmo tile → face; 2+ tiles → snap;
+   - A no parceiro não abre script;
+   - jogador e parceiro **atravessam** um ao outro (`DoesObjectCollideWithObjectAt`).
 
-**Supressão de eventos de campo** (`LinkCoop_ShouldSuppressFieldEvents()` → `LinkCoop_IsActive()`):
+**Sair do passeio compartilhado** (não sincronizar cutscene/luta):
 
-| Sistema | Arquivo | Comportamento |
-|---------|---------|---------------|
-| Trainers overworld | `field_control_avatar.c` | `CheckForTrainersWantingBattle` desligado |
-| Scripts on-frame | `field_control_avatar.c` | `TryRunOnFrameMapScript` desligado |
-| Scripts de passo | `field_control_avatar.c` | `TryStartStepBasedScript` desligado |
-| Encontros selvagens | `wild_encounter.c` | `TryStandardWildEncounter` retorna FALSE |
+| Evento | O que o outro vê |
+|--------|------------------|
+| Local em script/luta/menu (`busy=1`, ou CB2 fora do campo) | Sprite **congela** ~10 s (`FROZEN_HOLD_FRAMES` = 600), depois despawna. Sem aviso de área. |
+| Presença some (`lastSeen` ≥ 90 frames) | Idem: freeze e depois despawn. |
+| Peer volta ocioso no mesmo mapa | Snap na pose nova. |
+| Mapas diferentes (os dois ociosos) | Uma mensagem genérica (`EventScript_CoopPartnerLeftMap`); `wasTogether` zera para não spammar. |
+| Local em cutscene | Parceiro some **na hora** na tua tela (Oak/treinador não colidem no fantasma). |
 
-**RNG:** no primeiro pacote de presença, o **slave** copia `gRngValue` do master (`rngSynced`). Não há re-sync contínuo — se os lados consumirem RNG em ritmos diferentes, divergem.
+Texto (EN, estilo FRLG): *"You and the other TRAINER are no longer in the same area."* Quem warp e quem fica podem ver; não tentamos decidir “quem saiu”.
 
-**O que o co-op v1 NÃO faz (de propósito):**
+**Campo / selvagem:** cada save rola o próprio encontro e as próprias cutscenes. Autoridade de host para selvagem foi **implementada e revertida** — duas lutas “iguais” não são co-op e puxavam o guest. Canal `coop` segue reservado.
 
-- Não sincroniza warps (cada jogador fica no seu save/mapa).
-- Não interpola movimento — posição absoluta é aplicada a cada pacote (avatar “teleporta” em saltos).
-- Não tem timeout de presença — se pacotes param, avatar congela no último ponto.
-- Não usa `SpawnLinkPlayers()` vanilla (evita clones RED do Cable Club).
+**RNG:** o campo `rng` saiu do wire; o slave **não** escreve `gRngValue`. Divergência de RNG entre cartuchos é esperada.
 
-**Whitelist hardcoded** em `MapIsWhitelisted()` — mover para dados (map header flag ou tabela) quando expandir mapas.
+**O que o co-op NÃO faz:**
+
+- Warps sincronizados, quests compartilhadas, 4P.
+- Luta selvagem única para os dois.
+- Cutscene tocada nos dois cartuchos.
+
+**Não** usar `SpawnLinkPlayers()` vanilla no overworld do Conector (clones RED).
 
 ### 2.4 LinkDiag — observabilidade
 
@@ -213,14 +217,16 @@ UI vanilla de erro de link é suprimida durante sessão (`SetSuppressLinkErrorMe
 |---------|-------|
 | `include/link_session.h`, `src/link_session.c` | Máquina de estados, handoff, perfis timeout |
 | `include/link_proto.h`, `src/link_proto.c` | Datagramas, validação, prioridade de envio |
-| `include/link_coop.h`, `src/link_coop.c` | Presença co-op, whitelist, supressão |
+| `include/link_coop.h`, `src/link_coop.c` | Presença, busy/freeze, aviso de área |
+| `data/scripts/coop.inc` | `EventScript_CoopPartnerLeftMap` |
 | `include/link_diag.h`, `src/link_diag.c` | Contadores de diagnóstico |
 | `include/phone.h`, `src/phone.c` | Agenda, Conector, app channel, clube |
 | `include/global.h` | `PhoneSaveData`, `PhoneContact` em `SaveBlock2` |
 | `include/link.h` | `LINKTYPE_PHONE` (0x7701) |
-| `src/overworld.c` | `Overworld_UpdateCoopPartner`, retorno pós-multiplayer |
-| `src/field_control_avatar.c` | Supressão trainers/scripts em co-op |
-| `src/wild_encounter.c` | Supressão encontros em co-op |
+| `src/overworld.c` | Spawn/interpolação do parceiro, freeze |
+| `src/event_object_movement.c` | Sem colisão jogador ↔ `LOCALID_COOP_PARTNER` |
+| `src/field_control_avatar.c` | A no parceiro ignorado; cutscenes vanilla de novo |
+| `src/wild_encounter.c` | Selvagem **local** (sem gate co-op) |
 | `src/item_use.c` | `FieldUseFunc_Connector`, `FieldUseFunc_Agenda` |
 | `ld_script.ld`, `ld_script_rev10.ld` | Link order dos novos `.o` |
 | `arthorios/docs/follower-ow-sprites.md` | Bug de sprites no Continue (feature follower, **não** é bug do cabo) |
@@ -349,23 +355,23 @@ Header nome+ID, persistência, Conector no Select, bloqueio Union Room/Safari.
 - Rendezvous pós-warp ✅
 - Abrir Agenda automaticamente para pedido incoming ✅
 
-### Fase E — Co-op v1 (presença) 🟡
+### Fase E — Co-op v1 (presença) ✅
 
-- Canal `presence` + avatar remoto em Pallet/Route 1 ✅
-- Supressão encontros/scripts/trainers ✅
-- Interpolação de movimento ⬜
-- Timeout de presença ⬜
-- Whitelist em dados ⬜
+- Canal `presence` + avatar remoto em **qualquer mapa** (mesmo `mapGroup`/`mapNum`) ✅
+- Interpolação de movimento (passo adjacente) ✅
+- Timeout de presença (`lastSeen` ~90 frames) + freeze de batalha ✅
+- Whitelist Pallet/Route 1 **removida** (não há tabela em dados; todos os mapas) ✅
+- Colisão atravessável entre os dois avatares ✅
 
-### Fase F — Co-op avançado ⬜
+### Fase F — Co-op avançado (escopo reduzido) ✅
 
-Escopo **recomendado reduzido** (não perseguir mundo compartilhado completo):
+Modelo escolhido: **não** sincronizar história nem selvagem.
 
-- Encontros selvagens com autoridade do host (host sorteia, guest recebe).
-- Mensagem explícita ao sair do mapa whitelist.
-- Reabrir interação segura com NPCs (itens de script) — cutscenes permanecem off.
+- Selvagem **local** em cada save. Host-authoritative (guest puxado para a mesma espécie) foi tentado e **descartado**.
+- Aviso genérico ao deixarem de estar no mesmo mapa (`coop.inc`), uma vez por separação — sem decidir quem warp.
+- Cutscenes/NPCs/treinadores **ligados** no cartucho local. Quem entra em script/luta **sai do passeio** (sprite freeze ~10 s no outro jogo, depois despawn).
 
-Fora do escopo realista: warps sincronizados, quests compartilhadas, 4P co-op.
+Fora do escopo: warps sincronizados, quests compartilhadas, 4P, luta selvagem única.
 
 ### Fase G — RFU / wireless ⬜
 
@@ -414,14 +420,20 @@ Fase 4:
 Fase E (co-op):
 
 - [x] `LinkCoop` + canal `presence`
-- [x] `Overworld_UpdateCoopPartner`
-- [x] Supressão wild/trainers/scripts
-- [x] Validação `PresenceLooksSane` + `CoopCoordsInMap`
-- [ ] Interpolação / fila de movimento link player
-- [ ] Timeout presença (despawn após N frames sem pacote)
-- [ ] Whitelist configurável por mapa
+- [x] `Overworld_UpdateCoopPartner` (NPC + `WALK_NORMAL`, não `SpriteCB_LinkPlayer`)
+- [x] Qualquer mapa (sem whitelist)
+- [x] `PresenceFieldsSane` + coords no layout
+- [x] Timeout presença + freeze se `busy` / silêncio (~10 s)
+- [x] Interpolação passo adjacente; snap se 2+ tiles
 
-Fase 5–6, F, G: conforme seções acima.
+Fase F:
+
+- [x] Selvagem local (sem puxão host→guest)
+- [x] Cutscene/luta local; sair do passeio compartilhado
+- [x] Aviso genérico de área (`EventScript_CoopPartnerLeftMap`), sem loop
+- [x] Atravessar o sprite do amigo (sem deadlock em corredor)
+
+Fase 5–6, G: conforme seções acima.
 
 ---
 
@@ -436,8 +448,10 @@ Use esta seção para triagem rápida. Cada item indica **sintoma → causa prov
 | NPCs/follower pretos ou “tudo RED” no **Continue** | Follower (pré-cabo) | Spawn no Continue usa caminho diferente do warp; bug de sheets/paleta | `follower-ow-sprites.md`, `SpawnObjectEventOnReturnToField` |
 | Retângulos pretos na casa/cerca ao ligar cabo | UI + SIO | Popup/janela em BG0 + `CopyWindowToVram` no mesmo frame que `OpenLink` | **Removido** — não reintroduzir popup de campo |
 | Clones RED extras | Cable Club vanilla | `SpawnLinkPlayers` / `gFieldLinkPlayerCount` | Conector **não** deve chamar isso no overworld |
-| Avatar remoto “pula” / borracha | Co-op v1 | Posição absoluta a cada 24 frames, sem interpolação | `link_coop.c`, `Overworld_UpdateCoopPartner` |
-| Avatar remoto congelado | Co-op v1 | Sem timeout de presença | `link_coop.c` |
+| Avatar remoto “pula” em warp/corrida | Co-op | Snap se o delta for ≥ 2 tiles (esperado) | `CoopSyncPartnerWalk` |
+| Avatar remoto anda em passo | Co-op | Interpolação `WALK_NORMAL` | `overworld.c` |
+| Avatar remoto some após luta longa | Co-op | Freeze ~10 s, depois despawn; volta com snap | `FROZEN_HOLD_FRAMES` |
+| Aviso de área em loop / quem warp travado | Co-op | **Corrigido:** `wasTogether` zera após 1 aviso | `TrackPeerMap` |
 | Buraco preto na Agenda ao remover contato | UI Agenda | `DestroyYesNoMenu` + tilemap | `Phone_HandleRemoveConfirm` — Yes/No só dentro da Agenda |
 
 ### 10.2 Link / handshake
@@ -455,11 +469,14 @@ Use esta seção para triagem rápida. Cada item indica **sintoma → causa prov
 
 | Limitação | Impacto |
 |-----------|---------|
-| Só Pallet + Route 1 | Outros mapas: sem avatar, eventos normais |
-| Mapas diferentes | Avatar some; cada save independente |
-| Scripts/NPCs desligados em co-op ativo | Mapa “morto” para story — intencional v1 |
-| RNG sync único | Divergência se consumo de RNG diferir |
+| Saves independentes | Itens, captura, flags e warps não são compartilhados |
+| Mapas diferentes | Avatar some; 1 aviso genérico de área |
+| Peer em luta/script | Sprite freeze ~10 s, depois some; não é cabo caído |
+| Selvagem local | Cada um encontra o próprio Pokémon; um some da tela do outro durante a luta |
+| Cutscene local | Só o teu cartucho roda Oak/treinador; o outro te vê ocupado |
+| RNG independente | Esperado; não há sync de `gRngValue` |
 | Follower + Conector ON | Follower ainda visível (polish Fase 6: esconder) |
+| Paleta mista Red/Green | Avatares usam slot de player; genders diferentes podem recolorir |
 
 ### 10.4 UX / produto
 
@@ -482,18 +499,14 @@ Prioridade = retorno ÷ esforço para **este** projeto.
 | M1 | Commitar stack link + co-op + phone refatorado | XS | Proteger trabalho |
 | M2 | Chamar `LinkSession_Init()` / `LinkDiag_Reset()` no boot | XS | Higiene |
 | M3 | Testar Fase 4 completa em RetroArch gpSP netplay | S | Validar perfil REMOTE |
-| M4 | Timeout presença + despawn avatar | S | `lastSeen` em `LinkCoopCtx` |
-| M5 | Interpolação movimento link player | M | Fila vanilla em vez de teleport |
-| M6 | Whitelist de mapas em dados | S | Tabela ou flag no map header |
-| M7 | Mensagem “parceiro saiu do mapa” | S | Canal `coop` ou bit em presence |
 | M8 | `LinkSession_SetProfile(REMOTE)` automático | S | Detectar netplay se possível |
 
 ### Multiplayer (médio prazo — só se co-op importar)
 
 | # | Melhoria | Esforço | Notas |
 |---|----------|---------|-------|
-| M9 | Encontros selvagens host-authoritative | L | Host sorteia, guest recebe batalha |
-| M10 | Reabrir NPCs/itens de script em co-op | M | Manter cutscenes off |
+| M9 | Encontros selvagens host-authoritative | L | **Descartado** — não vale sem luta 2P real |
+| M10 | Cutscenes sincronizadas | L | **Descartado** — cada um sai do passeio |
 | M11 | RFU scan (Fase G) | L | gpSP-only, não bloqueante |
 
 ### QOL geral da ROM (fora do cabo, alto retorno)
@@ -590,16 +603,17 @@ Pré-requisito: Fase 3 OK.
 
 ---
 
-### 12.6 Co-op v1 — Pallet Town / Route 1
+### 12.6 Co-op — mesmo mapa
 
-Pré-requisito: Fase 3 OK; **mesmo mapa** nos dois lados.
+Pré-requisito: Fase 3 OK.
 
-1. A e B com Conector ON, ambos em Pallet Town.
-2. Ver avatar remoto andando (com saltos — esperado v1).
-3. Tentar encontro selvagem → **não deve ocorrer**.
-4. Tentar falar com NPC / trainer → **não deve disparar** (supressão).
-5. **A** warp para Route 1, **B** fica em Pallet → avatar de A some em B.
-6. Ambos Route 1 → avatar volta.
+1. A e B com Conector ON, **mesmo mapa** (Pallet, Route 1, casa, etc.).
+2. Ver avatar remoto **andando** (passo), não teleportando a cada 0,4 s.
+3. Andar na grama: cada um pode encontrar selvagem **sozinho**; o outro vê o sprite **congelado** ~10 s e depois some (ou volta com snap se a luta acabar antes).
+4. Falar com NPC / Oak / treinador: cutscene **local**; o parceiro some na tua tela na hora.
+5. Corredor estreito: devem **atravessar** um ao outro.
+6. **A** warp, **B** fica → cada um pode ver **uma** vez *"You and the other TRAINER are no longer in the same area."* Sem loop; dá para andar depois de A.
+7. Ambos de novo no mesmo mapa → avatar volta.
 
 ---
 
@@ -639,7 +653,8 @@ Pré-requisito: Fase 3 OK; **mesmo mapa** nos dois lados.
 | 2 | Save persiste; Select funciona |
 | 3 | 2 mGBA: nomes corretos e online/offline |
 | 4 | 1 batalha + 1 troca com Yes/No remoto; retorno ao campo com Conector ON |
-| E | Avatar co-op visível Pallet/Route1; wild/scripts off no mesmo mapa |
+| E | Avatar no mesmo mapa (qualquer um); passo interpolado; freeze se o outro luta |
+| F | Selvagem/cutscene locais; 1 aviso de área sem loop; atravessar o amigo |
 | 5/G | Scan RFU em gpSP `rfu` **ou** hardware |
 | 6 | Sem dummies; ícones ok; follower hide |
 
@@ -647,13 +662,13 @@ Pré-requisito: Fase 3 OK; **mesmo mapa** nos dois lados.
 
 ## 14. Fora de escopo (por enquanto)
 
-- Mundo compartilhado completo (warps sync, quests, cutscenes co-op).
+- Mundo compartilhado completo (warps sync, quests, cutscenes nos dois cartuchos, selvagem 2P).
 - Servidor / matchmaking além do netplay do emulador.
 - Chat completo da Union Room.
 - Mais de 2 jogadores no Conector cabo.
 - RFU na Agenda antes de cabo/netplay estável.
 
-**Dentro de escopo reduzido:** presença visual em whitelist, batalha/troca pela Agenda, diagnóstico de link.
+**Dentro de escopo (2P cabo/netplay):** presença visual no mesmo mapa, batalha/troca pela Agenda, diagnóstico de link, selvagem e história **locais**.
 
 ---
 
@@ -664,15 +679,13 @@ Ordem recomendada para **concluir** o multiplayer no escopo 2P cabo/netplay:
 1. **Commitar** stack `link_*` + integrações + refatoração `phone.c`.
 2. **Validar Fase 4** com Yes/No remoto em 2× mGBA e 1× RetroArch netplay.
 3. **Chamar `LinkSession_Init()`** no boot (`Phone_EnsureReady` ou equivalente).
-4. **Co-op polish mínimo:** timeout presença (M4) — baixo esforço, melhora muito a percepção.
-5. **Declarar Fase E “done enough”** ou investir em interpolação (M5) se co-op for prioridade.
-6. **Fase 6:** remover dummies, ícones, esconder follower com Conector ON.
-7. **Fase G (RFU)** só se houver demanda e ambiente gpSP disponível.
+4. **Fase 6:** remover dummies, ícones, esconder follower com Conector ON.
+5. **Fase G (RFU)** só se houver demanda e ambiente gpSP disponível.
 
 Teste de aceite mínimo do multiplayer “concluído”:
 
 - 2 instâncias, Conector ON, handshake estável 5+ minutos.
 - 1 batalha + 1 troca com accept/decline remotos.
 - Retorno ao mapa com sessão retomada.
-- Co-op: avatares visíveis em Pallet com supressão de wild (mesmo que movimento seja bruto).
+- Co-op: avatares no mesmo mapa, passo interpolado, freeze se um luta, 1 aviso de área sem loop.
 - Diagnóstico SELECT mostra sessões estabelecidas sem avalanche de TIMEOUT em LAN.

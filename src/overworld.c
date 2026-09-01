@@ -51,8 +51,10 @@
 #include "vs_seeker.h"
 #include "wild_encounter.h"
 #include "constants/cable_club.h"
+#include "constants/event_object_movement.h"
 #include "constants/event_objects.h"
 #include "constants/maps.h"
+#include "constants/trainer_types.h"
 #include "constants/region_map_sections.h"
 #include "constants/songs.h"
 #include "constants/sound.h"
@@ -224,6 +226,8 @@ static void MovementStatusHandler_TryAdvanceScript(struct LinkPlayerObjectEvent 
 static u8 FlipVerticalAndClearForced(u8 newFacing, u8 oldFacing);
 static u8 LinkPlayerDetectCollision(u8 selfObjEventId, u8 a2, s16 x, s16 y);
 static void SpriteCB_LinkPlayer(struct Sprite *sprite);
+static bool8 SpawnCoopPartnerAvatar(u8 playerId, s16 x, s16 y, u8 gender, u8 dir);
+static void CoopSyncPartnerWalk(struct ObjectEvent *objEvent, s16 x, s16 y, u8 dir);
 
 extern const struct MapLayout * gMapLayouts[];
 extern const struct MapHeader *const *gMapGroups[];
@@ -1403,7 +1407,6 @@ static void DoCB1_Overworld(u16 newKeys, u16 heldKeys)
 
     Phone_TryStartPendingLinkup();
     Phone_TryResumeLink();
-    Overworld_UpdateCoopPartner();
 
     QL_TryRunActions();
     UpdatePlayerAvatarTransitionState();
@@ -1424,6 +1427,7 @@ static void DoCB1_Overworld(u16 newKeys, u16 heldKeys)
             player_step(fieldInput.dpadDirection, newKeys, heldKeys);
         }
     }
+    Overworld_UpdateCoopPartner();
     RunQuestLogCB();
 }
 
@@ -3720,9 +3724,11 @@ static bool8 CoopLinkAvatarIsLive(u8 playerId)
     objEvent = &gObjectEvents[objEventId];
     if (!objEvent->active)
         return FALSE;
+    if (objEvent->localId != LOCALID_COOP_PARTNER)
+        return FALSE;
     if (objEvent->spriteId >= MAX_SPRITES)
         return FALSE;
-    if (gSprites[objEvent->spriteId].callback != SpriteCB_LinkPlayer)
+    if (!gSprites[objEvent->spriteId].inUse)
         return FALSE;
     return TRUE;
 }
@@ -3733,6 +3739,9 @@ static void CoopDiscardStaleAvatar(u8 playerId)
 {
     u8 objEventId;
     struct ObjectEvent *objEvent;
+    struct Sprite *sprite;
+    u32 paletteNum;
+    u16 tileStart;
 
     if (playerId >= MAX_LINK_PLAYERS)
         return;
@@ -3742,14 +3751,118 @@ static void CoopDiscardStaleAvatar(u8 playerId)
         if (objEventId < OBJECT_EVENTS_COUNT)
         {
             objEvent = &gObjectEvents[objEventId];
-            if (objEvent->spriteId < MAX_SPRITES
-             && gSprites[objEvent->spriteId].callback == SpriteCB_LinkPlayer)
-                DestroySprite(&gSprites[objEvent->spriteId]);
+            if (objEvent->active && objEvent->spriteId < MAX_SPRITES)
+            {
+                sprite = &gSprites[objEvent->spriteId];
+                paletteNum = sprite->oam.paletteNum;
+                tileStart = sprite->sheetTileStart;
+                DestroySprite(sprite);
+                FieldEffectFreePaletteIfUnused(paletteNum);
+                if (tileStart)
+                    FieldEffectFreeTilesIfUnused(tileStart);
+            }
             objEvent->active = FALSE;
             objEvent->spriteId = MAX_SPRITES;
         }
     }
     ZeroLinkPlayerObjectEvent(&gLinkPlayerObjectEvents[playerId]);
+}
+
+static u8 CoopDirFromDelta(s16 dx, s16 dy)
+{
+    if (dx > 0)
+        return DIR_EAST;
+    if (dx < 0)
+        return DIR_WEST;
+    if (dy > 0)
+        return DIR_SOUTH;
+    if (dy < 0)
+        return DIR_NORTH;
+    return DIR_SOUTH;
+}
+
+static s16 CoopAbsS16(s16 v)
+{
+    if (v < 0)
+        return -v;
+    return v;
+}
+
+static bool8 SpawnCoopPartnerAvatar(u8 playerId, s16 x, s16 y, u8 gender, u8 dir)
+{
+    int objEventId;
+    u8 elevation;
+    u8 gfx;
+    struct LinkPlayerObjectEvent *linkPlayerObjEvent;
+
+    if (playerId >= MAX_LINK_PLAYERS)
+        return FALSE;
+
+    gfx = GetRivalAvatarGraphicsIdByStateIdAndGender(PLAYER_AVATAR_STATE_NORMAL, gender);
+    elevation = MapGridGetElevationAt(x, y);
+    if (elevation == 0)
+        elevation = 3;
+
+    objEventId = SpawnSpecialObjectEventParameterized(gfx, MOVEMENT_TYPE_NONE, LOCALID_COOP_PARTNER, x, y, elevation);
+    if (objEventId == OBJECT_EVENTS_COUNT)
+        return FALSE;
+
+    linkPlayerObjEvent = &gLinkPlayerObjectEvents[playerId];
+    ZeroLinkPlayerObjectEvent(linkPlayerObjEvent);
+    linkPlayerObjEvent->active = TRUE;
+    linkPlayerObjEvent->linkPlayerId = playerId;
+    linkPlayerObjEvent->objEventId = objEventId;
+    linkPlayerObjEvent->movementMode = MOVEMENT_MODE_FREE;
+
+    ObjectEventTurn(&gObjectEvents[objEventId], dir);
+    return TRUE;
+}
+
+static void CoopSyncPartnerWalk(struct ObjectEvent *objEvent, s16 x, s16 y, u8 dir)
+{
+    s16 dx;
+    s16 dy;
+    s16 dist;
+    u8 stepDir;
+
+    dx = x - objEvent->currentCoords.x;
+    dy = y - objEvent->currentCoords.y;
+    dist = CoopAbsS16(dx) + CoopAbsS16(dy);
+
+    if (ObjectEventIsHeldMovementActive(objEvent))
+    {
+        if (ObjectEventClearHeldMovementIfFinished(objEvent) == 0)
+        {
+            if (dist > 1)
+            {
+                ObjectEventClearHeldMovement(objEvent);
+                MoveObjectEventToMapCoords(objEvent, x, y);
+                ObjectEventTurn(objEvent, dir);
+            }
+            return;
+        }
+    }
+
+    dx = x - objEvent->currentCoords.x;
+    dy = y - objEvent->currentCoords.y;
+    dist = CoopAbsS16(dx) + CoopAbsS16(dy);
+
+    if (dist == 0)
+    {
+        if (objEvent->facingDirection != dir)
+            ObjectEventSetHeldMovement(objEvent, GetFaceDirectionMovementAction(dir));
+        return;
+    }
+
+    if (dist == 1 && (dx == 0 || dy == 0))
+    {
+        stepDir = CoopDirFromDelta(dx, dy);
+        ObjectEventSetHeldMovement(objEvent, GetWalkNormalMovementAction(stepDir));
+        return;
+    }
+
+    MoveObjectEventToMapCoords(objEvent, x, y);
+    ObjectEventTurn(objEvent, dir);
 }
 
 void Overworld_UpdateCoopPartner(void)
@@ -3798,9 +3911,7 @@ void Overworld_UpdateCoopPartner(void)
             return;
         }
         CoopDiscardStaleAvatar(playerId);
-        SpawnLinkPlayerObjectEvent(playerId, x, y, gender);
-        CreateLinkPlayerSprite(playerId, VERSION_FIRE_RED);
-        if (CoopLinkAvatarIsLive(playerId))
+        if (SpawnCoopPartnerAvatar(playerId, x, y, gender, dir))
         {
             sCoopAvatarId = playerId;
             sCoopAvatarSpawned = TRUE;
@@ -3815,8 +3926,12 @@ void Overworld_UpdateCoopPartner(void)
     {
         objEventId = gLinkPlayerObjectEvents[playerId].objEventId;
         if (objEventId < OBJECT_EVENTS_COUNT)
-            InitLinkPlayerObjectEventPos(&gObjectEvents[objEventId], x, y);
-        SetLinkPlayerObjectRange(playerId, dir);
+        {
+            if (LinkCoop_PeerPoseIsFrozen())
+                ObjectEventClearHeldMovementIfActive(&gObjectEvents[objEventId]);
+            else
+                CoopSyncPartnerWalk(&gObjectEvents[objEventId], x, y, dir);
+        }
         sCoopAvatarId = playerId;
         sCoopAvatarSpawned = TRUE;
         sCoopSpawnRetry = 0;

@@ -179,16 +179,29 @@ void LoadPlayerParty(void)
         gPlayerParty[i] = gSaveBlock1Ptr->playerParty[i];
 }
 
+// FRLG stores graphicsId as native little-endian u16. The Emerald follower
+// port swapped NPC ids (< 0x200) on save, then failed to unswap on load
+// because the swapped value (e.g. Oak 0x0047 -> 0x4700) is no longer < 0x200.
+// GetObjectEventGraphicsInfo then treated it as a VAR gfx and mapped to RED.
+// Detect that legacy form: high byte is a vanilla gfx id, low byte is 0.
+static u16 UnswapLegacyFollowerGraphicsId(u16 graphicsId)
+{
+    u16 restored = graphicsId >> 8;
+
+    if ((graphicsId & 0xFF) == 0
+     && restored != 0
+     && restored < NUM_OBJ_EVENT_GFX)
+        return restored;
+    return graphicsId;
+}
+
 void SaveObjectEvents(void)
 {
     int i;
 
     for (i = 0; i < OBJECT_EVENTS_COUNT; i++)
     {
-        u16 graphicsId = gObjectEvents[i].graphicsId;
         gSaveBlock1Ptr->objectEvents[i] = gObjectEvents[i];
-        if (graphicsId < OBJ_EVENT_GFX_MON_BASE)
-            gSaveBlock1Ptr->objectEvents[i].graphicsId = (graphicsId >> 8) | (graphicsId << 8);
         gSaveBlock1Ptr->objectEvents[i].spriteId = 127;
         if (gObjectEvents[i].localId == OBJ_EVENT_ID_FOLLOWER)
             gSaveBlock1Ptr->objectEvents[i].active = FALSE;
@@ -198,18 +211,11 @@ void SaveObjectEvents(void)
 void LoadObjectEvents(void)
 {
     int i;
-    u16 graphicsId;
 
     for (i = 0; i < OBJECT_EVENTS_COUNT; i++)
     {
         gObjectEvents[i] = gSaveBlock1Ptr->objectEvents[i];
-        graphicsId = gObjectEvents[i].graphicsId;
-        if (graphicsId < OBJ_EVENT_GFX_MON_BASE)
-        {
-            gObjectEvents[i].graphicsId = (graphicsId >> 8) | (graphicsId << 8);
-            if (gObjectEvents[i].spriteId != 127)
-                gObjectEvents[i].graphicsId &= 0xFF;
-        }
+        gObjectEvents[i].graphicsId = UnswapLegacyFollowerGraphicsId(gObjectEvents[i].graphicsId);
         gObjectEvents[i].spriteId = 0;
         if (gObjectEvents[i].localId == OBJ_EVENT_ID_FOLLOWER)
         {

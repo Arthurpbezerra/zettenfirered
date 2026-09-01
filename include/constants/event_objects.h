@@ -231,6 +231,7 @@
 #define LOCALID_NONE                         0
 #define LOCALID_CAMERA                     127
 #define LOCALID_BERRY_BLENDER_PLAYER_END   240 // This will use 5 (MAX_RFU_PLAYERS) IDs ending at 240, i.e. 236-240
+#define LOCALID_COOP_PARTNER               253 // Connector overworld partner (SpawnSpecialObjectEvent)
 #define LOCALID_FOLLOWING_POKEMON          254 // party lead follower (SpawnSpecialObjectEvent)
 #define LOCALID_PLAYER                     255
 
@@ -238,5 +239,6 @@
 #define OBJ_EVENT_ID_CAMERA   LOCALID_CAMERA
 #define OBJ_EVENT_ID_PLAYER   LOCALID_PLAYER
 #define OBJ_EVENT_ID_FOLLOWER LOCALID_FOLLOWING_POKEMON
+#define OBJ_EVENT_ID_COOP_PARTNER LOCALID_COOP_PARTNER
 
 #endif // GUARD_CONSTANTS_EVENT_OBJECTS_H

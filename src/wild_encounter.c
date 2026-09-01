@@ -12,7 +12,6 @@
 #include "event_scripts.h"
 #include "script.h"
 #include "link.h"
-#include "link_coop.h"
 #include "quest_log.h"
 #include "constants/maps.h"
 #include "constants/abilities.h"
@@ -757,8 +756,6 @@ static bool8 HandleWildEncounterCooldown(u32 currMetatileAttrs)
 
 bool8 TryStandardWildEncounter(u32 currMetatileAttrs)
 {
-    if (LinkCoop_ShouldSuppressFieldEvents())
-        return FALSE;
     if (!HandleWildEncounterCooldown(currMetatileAttrs))
     {
         sWildEncounterData.prevMetatileBehavior = ExtractMetatileAttribute(currMetatileAttrs, METATILE_ATTRIBUTE_BEHAVIOR);

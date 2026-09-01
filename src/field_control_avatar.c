@@ -13,7 +13,6 @@
 #include "field_poison.h"
 #include "field_specials.h"
 #include "item_menu.h"
-#include "link_coop.h"
 #include "link.h"
 #include "wonder_news.h"
 #include "metatile_behavior.h"
@@ -197,7 +196,6 @@ int ProcessPlayerFieldInput(struct FieldInput *input)
     u8 playerDirection;
     u16 metatileBehavior;
     u32 metatileAttributes;
-    bool8 suppressCoop;
 
     ResetFacingNpcOrSignpostVars();
     playerDirection = GetPlayerFacingDirection();
@@ -208,15 +206,11 @@ int ProcessPlayerFieldInput(struct FieldInput *input)
     FieldClearPlayerInput(&gFieldInputRecord);
     gFieldInputRecord.dpadDirection = input->dpadDirection;
 
-    suppressCoop = LinkCoop_ShouldSuppressFieldEvents();
-    if (!suppressCoop)
-    {
-        if (CheckForTrainersWantingBattle() == TRUE)
-            return TRUE;
+    if (CheckForTrainersWantingBattle() == TRUE)
+        return TRUE;
 
-        if (TryRunOnFrameMapScript() == TRUE)
-            return TRUE;
-    }
+    if (TryRunOnFrameMapScript() == TRUE)
+        return TRUE;
 
     if (input->tookStep)
     {
@@ -226,7 +220,7 @@ int ProcessPlayerFieldInput(struct FieldInput *input)
         RunMassageCooldownStepCounter();
         IncrementResortGorgeousStepCounter();
         IncrementBirthIslandRockStepCount();
-        if (!suppressCoop && TryStartStepBasedScript(&position, metatileBehavior, playerDirection) == TRUE)
+        if (TryStartStepBasedScript(&position, metatileBehavior, playerDirection) == TRUE)
         {
             gFieldInputRecord.tookStep = TRUE;
             return TRUE;
@@ -420,7 +414,9 @@ const u8 *GetInteractedLinkPlayerScript(struct MapPosition *position, u8 metatil
     else
         objectEventId = GetObjectEventIdByPosition(position->x + gDirectionToVectors[direction].x, position->y + gDirectionToVectors[direction].y, position->elevation);
 
-    if (objectEventId == OBJECT_EVENTS_COUNT || gObjectEvents[objectEventId].localId == LOCALID_PLAYER)
+    if (objectEventId == OBJECT_EVENTS_COUNT
+     || gObjectEvents[objectEventId].localId == LOCALID_PLAYER
+     || gObjectEvents[objectEventId].localId == LOCALID_COOP_PARTNER)
         return NULL;
 
     for (i = 0; i < MAX_LINK_PLAYERS; i++)
@@ -441,14 +437,18 @@ static const u8 *GetInteractedObjectEventScript(struct MapPosition *position, u8
     const u8 *script;
 
     objectEventId = GetObjectEventIdByPosition(position->x, position->y, position->elevation);
-    if (objectEventId == OBJECT_EVENTS_COUNT || gObjectEvents[objectEventId].localId == LOCALID_PLAYER)
+    if (objectEventId == OBJECT_EVENTS_COUNT
+     || gObjectEvents[objectEventId].localId == LOCALID_PLAYER
+     || gObjectEvents[objectEventId].localId == LOCALID_COOP_PARTNER)
     {
         if (MetatileBehavior_IsCounter(metatileBehavior) != TRUE)
             return NULL;
 
         // Look for an object event on the other side of the counter.
         objectEventId = GetObjectEventIdByPosition(position->x + gDirectionToVectors[direction].x, position->y + gDirectionToVectors[direction].y, position->elevation);
-        if (objectEventId == OBJECT_EVENTS_COUNT || gObjectEvents[objectEventId].localId == LOCALID_PLAYER)
+        if (objectEventId == OBJECT_EVENTS_COUNT
+         || gObjectEvents[objectEventId].localId == LOCALID_PLAYER
+         || gObjectEvents[objectEventId].localId == LOCALID_COOP_PARTNER)
             return NULL;
     }
 

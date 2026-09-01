@@ -1346,6 +1346,7 @@ Text_TestMsg::
 	.include "data/text/day_care.inc"
 	.include "data/scripts/flash.inc"
 	.include "data/scripts/repel.inc"
+	.include "data/scripts/coop.inc"
 	.include "data/scripts/safari_zone.inc"
 	.include "data/text/safari_zone.inc"
 	.include "data/text/competitive_brothers.inc"

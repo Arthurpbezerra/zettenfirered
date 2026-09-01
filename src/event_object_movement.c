@@ -1804,13 +1804,20 @@ static void MakeObjectTemplateFromObjectEventTemplate(const struct ObjectEventTe
 }
 
 // Used to create a sprite using a graphicsId associated with object events.
+// Isolated screens (naming, shop, Teachy TV) have gReservedSpritePaletteCount == 0
+// and need the palette tag registered for CreateSprite. The overworld already
+// reserved slots 0-11; patching in place and setting paletteNum avoids allocating
+// slots 12-15 (which made grass/field effects pick up the player palette).
 u8 CreateObjectGraphicsSprite(u16 graphicsId, SpriteCallback callback, s16 x, s16 y, u8 subpriority)
 {
     struct SpriteTemplate spriteTemplate;
     const struct SubspriteTable *subspriteTables;
+    const struct ObjectEventGraphicsInfo *graphicsInfo;
     u8 spriteId;
+    bool8 useFixedPaletteSlot = FALSE;
 
     CopyObjectGraphicsInfoToSpriteTemplate(graphicsId, callback, &spriteTemplate, &subspriteTables);
+    graphicsInfo = GetObjectEventGraphicsInfo(graphicsId);
     if (spriteTemplate.paletteTag == OBJ_EVENT_PAL_TAG_DYNAMIC)
     {
         struct ObjectEvent *obj = GetFollowerObject();
@@ -1821,28 +1828,39 @@ u8 CreateObjectGraphicsSprite(u16 graphicsId, SpriteCallback callback, s16 x, s1
         spriteTemplate.paletteTag = GetSpritePaletteTagByPaletteNum(paletteNum);
     }
     else if (spriteTemplate.paletteTag != TAG_NONE)
-        LoadObjectEventPaletteIntoSlot(spriteTemplate.paletteTag, GetObjectEventGraphicsInfo(graphicsId)->paletteSlot);
+    {
+        if (gReservedSpritePaletteCount == 0)
+        {
+            LoadObjectEventPalette(spriteTemplate.paletteTag);
+        }
+        else
+        {
+            LoadObjectEventPaletteIntoSlot(spriteTemplate.paletteTag, graphicsInfo->paletteSlot);
+            *(u16 *)&spriteTemplate.paletteTag = TAG_NONE;
+            useFixedPaletteSlot = TRUE;
+        }
+    }
 
 #if OW_GFX_COMPRESS
-    {
-        const struct ObjectEventGraphicsInfo *graphicsInfo = GetObjectEventGraphicsInfo(graphicsId);
-        if (graphicsInfo->compressed)
-            spriteTemplate.tileTag = LoadSheetGraphicsInfo(graphicsInfo, graphicsId, NULL);
-    }
+    if (graphicsInfo->compressed)
+        spriteTemplate.tileTag = LoadSheetGraphicsInfo(graphicsInfo, graphicsId, NULL);
 #endif
 
     spriteId = CreateSprite(&spriteTemplate, x, y, subpriority);
-    if (spriteId != MAX_SPRITES && subspriteTables != NULL)
+    if (spriteId != MAX_SPRITES)
     {
         struct Sprite *sprite = &gSprites[spriteId];
-        if (OW_GFX_COMPRESS)
+        if (useFixedPaletteSlot
+         && graphicsInfo->paletteTag != OBJ_EVENT_PAL_TAG_DYNAMIC
+         && graphicsInfo->paletteTag != OBJ_EVENT_PAL_TAG_SUBSTITUTE)
+            sprite->oam.paletteNum = graphicsInfo->paletteSlot;
+        if (subspriteTables != NULL)
         {
-            const struct ObjectEventGraphicsInfo *graphicsInfo = GetObjectEventGraphicsInfo(graphicsId);
-            if (graphicsInfo->compressed)
+            if (OW_GFX_COMPRESS && graphicsInfo->compressed)
                 sprite->sheetSpan = GetSpanPerImage(sprite->oam.shape, sprite->oam.size);
+            SetSubspriteTables(sprite, subspriteTables);
+            sprite->subspriteMode = SUBSPRITES_IGNORE_PRIORITY;
         }
-        SetSubspriteTables(sprite, subspriteTables);
-        sprite->subspriteMode = SUBSPRITES_IGNORE_PRIORITY;
     }
     return spriteId;
 }
@@ -2030,12 +2048,16 @@ static void SpawnObjectEventOnReturnToField(u8 objectEventId, s16 x, s16 y)
 #endif
     if (spriteTemplate.paletteTag != TAG_NONE && spriteTemplate.paletteTag != OBJ_EVENT_PAL_TAG_DYNAMIC)
         LoadObjectEventPaletteIntoSlot(spriteTemplate.paletteTag, graphicsInfo->paletteSlot);
+    // Same sequence as TrySetupObjectEventSprite (warp): don't let CreateSprite
+    // IndexOfSpritePaletteTag a tag that was patched into a reserved slot.
+    if (spriteTemplate.paletteTag != OBJ_EVENT_PAL_TAG_DYNAMIC)
+        *(u16 *)&spriteTemplate.paletteTag = TAG_NONE;
 
     i = CreateSprite(&spriteTemplate, 0, 0, 0);
     if (i != MAX_SPRITES)
     {
         sprite = &gSprites[i];
-        if (spriteTemplate.paletteTag == OBJ_EVENT_PAL_TAG_DYNAMIC)
+        if (graphicsInfo->paletteTag == OBJ_EVENT_PAL_TAG_DYNAMIC)
             sprite->oam.paletteNum = LoadDynamicFollowerPalette(OW_SPECIES(objectEvent), OW_FORM(objectEvent), objectEvent->shiny);
 #if OW_GFX_COMPRESS
         if (sprite->usingSheet)
@@ -5064,6 +5086,18 @@ static bool8 IsMetatileDirectionallyImpassable(struct ObjectEvent *objectEvent, 
     return FALSE;
 }
 
+static bool8 CoopPartnerAndPlayerShouldPassThrough(struct ObjectEvent *a, struct ObjectEvent *b)
+{
+    u8 aId = a->localId;
+    u8 bId = b->localId;
+
+    if (aId == LOCALID_PLAYER && bId == LOCALID_COOP_PARTNER)
+        return TRUE;
+    if (aId == LOCALID_COOP_PARTNER && bId == LOCALID_PLAYER)
+        return TRUE;
+    return FALSE;
+}
+
 static bool8 DoesObjectCollideWithObjectAt(struct ObjectEvent *objectEvent, s16 x, s16 y)
 {
     u8 i;
@@ -5077,7 +5111,8 @@ static bool8 DoesObjectCollideWithObjectAt(struct ObjectEvent *objectEvent, s16 
         {
             if ((curObject->currentCoords.x == x && curObject->currentCoords.y == y) || (curObject->previousCoords.x == x && curObject->previousCoords.y == y))
             {
-                if (AreElevationsCompatible(objectEvent->currentElevation, curObject->currentElevation))
+                if (AreElevationsCompatible(objectEvent->currentElevation, curObject->currentElevation)
+                 && !CoopPartnerAndPlayerShouldPassThrough(objectEvent, curObject))
                     return TRUE;
             }
         }
