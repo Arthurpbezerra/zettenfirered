@@ -66,31 +66,51 @@ PalletTown_Text_OakYouEnjoyingTraveling::
     .string "Hohoho.$"
 
 PalletTown_Text_ArthoriosGreeting::
-    .string "E ai, noob. Eu sou o Arthorios.\p"
-    .string "Bem-vindo a PALLET TOWN.\n"
-    .string "Sua jornada comeca aqui.$"
-
-PalletTown_Text_ArthoriosGivePhone::
-    .string "Toma este CONECTOR e esta AGENDA.\p"
-    .string "Liga o CONECTOR quando quiser\n"
-    .string "ficar online.\p"
-    .string "Depois abre a AGENDA pra ver quem\n"
-    .string "esta por perto.$"
+    .string "Hey. I'm ARTHORIOS.\p"
+    .string "Welcome to PALLET TOWN.\n"
+    .string "Your journey starts here.\p"
+    .string "I deal in POKéMON. Any species\n"
+    .string "from Kanto, if you want one.$"
 
 PalletTown_Text_ArthoriosChoosePokemon::
-    .string "Pode escolher qualquer POKéMON.\n"
-    .string "Tenho todos de Kanto.\p"
-    .string "Vai ser Nv. 1, mas e de graca.\n"
-    .string "Confia.$"
+    .string "Pick any POKéMON. I've got all of\n"
+    .string "Kanto.\p"
+    .string "It'll be Lv. 1, but it's free.\n"
+    .string "Trust me.$"
 
 PalletTown_Text_ArthoriosConfirmGive::
-    .string "Quer o {STR_VAR_1}?$"
+    .string "You want {STR_VAR_1}?$"
+
+PalletTown_Text_ArthoriosAskShiny::
+    .string "Want it SHINY?\n"
+    .string "I can make that happen.$"
 
 PalletTown_Text_ArthoriosReceivedMon::
-    .string "{PLAYER} recebeu {STR_VAR_1}!$"
+    .string "{PLAYER} received {STR_VAR_1}!$"
 
-PalletTown_Text_Gigi::
-    .string "Gigi: Oi.$"
+PalletTown_Text_GigiGreeting::
+    .string "GIGI: Hi! I'm GIGI.\p"
+    .string "Take this LINK CONNECTOR and\n"
+    .string "TRAINER AGENDA.$"
+
+PalletTown_Text_GigiExplainGear::
+    .string "Turn the CONNECTOR on when you\n"
+    .string "want to go online.\p"
+    .string "Then open the AGENDA to see who's\n"
+    .string "around.\p"
+    .string "ARTHORIOS is the one with the\n"
+    .string "POKéMON, if you need a partner.$"
+
+PalletTown_Text_GigiAlreadyGave::
+    .string "GIGI: CONNECTOR on, AGENDA open.\n"
+    .string "That's the whole trick.\p"
+    .string "Need a POKéMON? Talk to ARTHORIOS.$"
+
+PalletTown_Text_GigiOfferCandy::
+    .string "GIGI: Want some RARE CANDY?$"
+
+PalletTown_Text_GigiHowManyCandy::
+    .string "How many?$"
 
 PalletTown_Text_Mew::
     .string "MEW: Mew!$"

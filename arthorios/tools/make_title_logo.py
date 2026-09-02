@@ -31,10 +31,10 @@ def gba(c):
     return (c >> 3) << 3
 
 
-def snap(r, g, b):
+def snap(r, g, b, crush_dark=False):
     if is_chroma(r, g, b):
         return CHROMA
-    if r + g + b <= 60:
+    if crush_dark and r + g + b <= 60:
         return (0, 0, 0)
     return (gba(r), gba(g), gba(b))
 
@@ -144,29 +144,13 @@ def restore_vanilla_bin():
     DST_BIN.write_bytes(struct.pack("<%dH" % len(entries), *entries))
 
 
-def main():
-    src = Image.open(DST).convert("RGB")
-    poke_range, ver_range = split_groups(src)
-    poke = src.crop((poke_range[0], 0, poke_range[1], src.size[1]))
-    ver = src.crop((ver_range[0], 0, ver_range[1], src.size[1]))
-
-    canvas = Image.new("RGB", (W, H), CHROMA)
-    poke_fit = fit_into(poke, POKE_W - 4, H - 4)
-    title_box, ver_box = split_horizontal(ver)
-    title_im = ver.crop((0, title_box[0], ver.size[0], title_box[1]))
-    ver_im = ver.crop((0, ver_box[0], ver.size[0], ver_box[1]))
-    title_fit = fit_into(title_im, VER_W - 4, 34)
-    ver_fit = fit_into(ver_im, VER_W - 8, 18)
-    canvas.paste(poke_fit, (2, (H - poke_fit.size[1]) // 2))
-    canvas.paste(title_fit, (VER_X + 2, 1))
-    canvas.paste(ver_fit, (VER_X + 4, 36))
-
+def write_indexed(canvas, crush_dark=False):
     px = canvas.load()
     colors = {CHROMA: 0}
     ordered = [CHROMA]
     for y in range(H):
         for x in range(W):
-            col = snap(*px[x, y])
+            col = snap(*px[x, y], crush_dark=crush_dark)
             px[x, y] = col
             if col in colors:
                 continue
@@ -197,6 +181,55 @@ def main():
             f.write("%d %d %d\n" % (pal[i * 3], pal[i * 3 + 1], pal[i * 3 + 2]))
     restore_vanilla_bin()
     print("wrote", DST.name, "colors", len(ordered), "bin", DST_BIN.stat().st_size)
+
+
+def pack_keep_layout(src_path):
+    """GBA 8bpp + chroma only. Same pixels, no crop/scale/split."""
+    src = Image.open(src_path).convert("RGB")
+    canvas = Image.new("RGB", (W, H), CHROMA)
+    canvas.paste(src.crop((0, 0, min(src.size[0], W), min(src.size[1], H))), (0, 0))
+    write_indexed(canvas, crush_dark=False)
+
+
+def pack_relayout():
+    src = Image.open(DST).convert("RGB")
+    poke_range, ver_range = split_groups(src)
+    poke = src.crop((poke_range[0], 0, poke_range[1], src.size[1]))
+    ver = src.crop((ver_range[0], 0, ver_range[1], src.size[1]))
+
+    canvas = Image.new("RGB", (W, H), CHROMA)
+    poke_fit = fit_into(poke, POKE_W - 4, H - 4)
+    title_box, ver_box = split_horizontal(ver)
+    title_im = ver.crop((0, title_box[0], ver.size[0], title_box[1]))
+    ver_im = ver.crop((0, ver_box[0], ver.size[0], ver_box[1]))
+    title_fit = fit_into(title_im, VER_W - 4, 34)
+    ver_fit = fit_into(ver_im, VER_W - 8, 18)
+    canvas.paste(poke_fit, (2, (H - poke_fit.size[1]) // 2))
+    canvas.paste(title_fit, (VER_X + 2, 1))
+    canvas.paste(ver_fit, (VER_X + 4, 36))
+    write_indexed(canvas, crush_dark=True)
+
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "src",
+        nargs="?",
+        default=str(ROOT / "testing/game_title_logo.png"),
+        help="Source PNG (default: testing/game_title_logo.png)",
+    )
+    parser.add_argument(
+        "--relayout",
+        action="store_true",
+        help="Split/scale the version strip (destroys pixel layout)",
+    )
+    args = parser.parse_args()
+    if args.relayout:
+        pack_relayout()
+    else:
+        pack_keep_layout(args.src)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 #include "global.h"
 #include "window.h"
 #include "text.h"
+#include "main.h"
 
 static EWRAM_DATA struct TextPrinter sTempTextPrinter = {0};
 static EWRAM_DATA struct TextPrinter sTextPrinters[NUM_TEXT_PRINTERS] = {0};
@@ -120,19 +121,32 @@ void RunTextPrinters(void)
     {
         if (sTextPrinters[i].active)
         {
-            u16 renderCmd = RenderFont(&sTextPrinters[i]);
-            switch (renderCmd)
+            u16 renderCmd;
+            u16 dumpIters = 0;
+            bool8 dumpBox = (sTextPrinters[i].state == RENDER_STATE_HANDLE_CHAR
+                             && gTextFlags.canABSpeedUpPrint
+                             && JOY_NEW(A_BUTTON));
+
+            do
             {
-            case RENDER_PRINT:
-                CopyWindowToVram(sTextPrinters[i].printerTemplate.windowId, COPYWIN_GFX);
-            case RENDER_UPDATE:
-                if (sTextPrinters[i].callback != NULL)
-                    sTextPrinters[i].callback(&sTextPrinters[i].printerTemplate, renderCmd);
-                break;
-            case RENDER_FINISH:
-                sTextPrinters[i].active = FALSE;
-                break;
-            }
+                renderCmd = RenderFont(&sTextPrinters[i]);
+                switch (renderCmd)
+                {
+                case RENDER_PRINT:
+                    CopyWindowToVram(sTextPrinters[i].printerTemplate.windowId, COPYWIN_GFX);
+                case RENDER_UPDATE:
+                    if (sTextPrinters[i].callback != NULL)
+                        sTextPrinters[i].callback(&sTextPrinters[i].printerTemplate, renderCmd);
+                    break;
+                case RENDER_FINISH:
+                    sTextPrinters[i].active = FALSE;
+                    break;
+                }
+                dumpIters++;
+            } while (dumpBox
+                     && sTextPrinters[i].active
+                     && renderCmd == RENDER_PRINT
+                     && dumpIters < 0x400);
         }
     }
 }

@@ -453,6 +453,7 @@ gSpecials::
 	def_special LoopWingFlapSound
 	def_special CreateEnemyEventMon
 	def_special ChooseKantoSpeciesFromList
+	def_special GiveChosenMonMaybeShiny
 	def_special GivePhoneKeyItems
 	def_special Phone_OnClubLinkupEnd
 	def_special TryPhoneClubLinkup

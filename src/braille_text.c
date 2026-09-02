@@ -24,18 +24,11 @@ u16 FontFunc_Braille(struct TextPrinter *textPrinter)
     switch (textPrinter->state)
     {
     case RENDER_STATE_HANDLE_CHAR:
-        if (JOY_HELD(A_BUTTON | B_BUTTON) && sub->hasPrintBeenSpedUp)
-        {
+        if (gTextFlags.canABSpeedUpPrint && JOY_NEW(A_BUTTON))
             textPrinter->delayCounter = 0;
-        }
         if (textPrinter->delayCounter && textPrinter->textSpeed)
         {
             textPrinter->delayCounter--;
-            if (gTextFlags.canABSpeedUpPrint && JOY_NEW(A_BUTTON | B_BUTTON))
-            {
-                sub->hasPrintBeenSpedUp = TRUE;
-                textPrinter->delayCounter = 0;
-            }
             return RENDER_UPDATE;
         }
         if (gTextFlags.autoScroll)

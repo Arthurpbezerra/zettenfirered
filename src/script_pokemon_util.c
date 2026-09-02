@@ -8,6 +8,8 @@
 #include "party_menu.h"
 #include "pokedex.h"
 #include "script_pokemon_util.h"
+#include "pokemon.h"
+#include "random.h"
 #include "constants/items.h"
 #include "constants/pokemon.h"
 
@@ -52,7 +54,24 @@ u8 ScriptGiveMon(u16 species, u8 level, u16 item, u32 unused1, u32 unused2, u8 u
     u8 heldItem[2];
     struct Pokemon *mon = AllocZeroed(sizeof(struct Pokemon));
 
-    CreateMon(mon, species, level, 32, 0, 0, OT_ID_PLAYER_ID, 0);
+    if (unused3)
+    {
+        u32 personality;
+        u32 otId = gSaveBlock2Ptr->playerTrainerId[0]
+                 | (gSaveBlock2Ptr->playerTrainerId[1] << 8)
+                 | (gSaveBlock2Ptr->playerTrainerId[2] << 16)
+                 | (gSaveBlock2Ptr->playerTrainerId[3] << 24);
+
+        do
+        {
+            personality = Random32();
+        } while (GET_SHINY_VALUE(otId, personality) >= SHINY_ODDS);
+        CreateMon(mon, species, level, 32, TRUE, personality, OT_ID_PLAYER_ID, 0);
+    }
+    else
+    {
+        CreateMon(mon, species, level, 32, 0, 0, OT_ID_PLAYER_ID, 0);
+    }
     heldItem[0] = item;
     heldItem[1] = item >> 8;
     SetMonData(mon, MON_DATA_HELD_ITEM, heldItem);
@@ -70,6 +89,11 @@ u8 ScriptGiveMon(u16 species, u8 level, u16 item, u32 unused1, u32 unused2, u8 u
 
     Free(mon);
     return sentToPc;
+}
+
+void GiveChosenMonMaybeShiny(void)
+{
+    gSpecialVar_Result = ScriptGiveMon(gSpecialVar_0x8004, 1, ITEM_NONE, 0, 0, gSpecialVar_0x8005);
 }
 
 u8 ScriptGiveEgg(u16 species)

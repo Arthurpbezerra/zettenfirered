@@ -388,9 +388,13 @@ static const struct MenuAction sMultichoiceList_TradeColosseumCrush[] = {
     { gOtherText_Exit }
 };
 
-static const struct MenuAction sMultichoiceList_48[] = {
-    { gText_EmptyLinkService1 },
-    { gText_EmptyLinkService2 },
+static const struct MenuAction sMultichoiceList_RareCandyQty[] = {
+    { gText_RareCandyQty1 },
+    { gText_RareCandyQty5 },
+    { gText_RareCandyQty10 },
+    { gText_RareCandyQty30 },
+    { gText_RareCandyQty50 },
+    { gText_RareCandyQty99 },
     { gOtherText_Exit }
 };
 
@@ -551,7 +555,7 @@ static const struct MultichoiceListStruct sMultichoiceLists[] = {
     [MULTICHOICE_ISLAND_13]                                  = MULTICHOICE(sMultichoiceList_Island13),
     [MULTICHOICE_ISLAND_12]                                  = MULTICHOICE(sMultichoiceList_Island12),
     [MULTICHOICE_TRADE_COLOSSEUM_CRUSH]                      = MULTICHOICE(sMultichoiceList_TradeColosseumCrush),
-    [MULTICHOICE_48]                                         = MULTICHOICE(sMultichoiceList_48),
+    [MULTICHOICE_RARE_CANDY_QTY]                             = MULTICHOICE(sMultichoiceList_RareCandyQty),
     [MULTICHOICE_POKEJUMP_DODRIO]                            = MULTICHOICE(sMultichoiceList_PokejumpDodrio),
     [MULTICHOICE_TRADE_COLOSSEUM_2]                          = MULTICHOICE(sMultichoiceList_TradeColosseum_2),
     [MULTICHOICE_MUSHROOMS]                                  = MULTICHOICE(sMultichoiceList_Mushrooms),

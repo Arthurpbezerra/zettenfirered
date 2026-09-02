@@ -392,12 +392,9 @@ PalletTown_EventScript_FatMan::
 PalletTown_EventScript_Arthorios::
 	lock
 	faceplayer
+	goto_if_set FLAG_MET_ARTHORIOS, PalletTown_EventScript_Arthorios_ChooseMon
 	msgbox PalletTown_Text_ArthoriosGreeting, MSGBOX_DEFAULT
-	goto_if_set FLAG_GOT_PHONE_GEAR, PalletTown_EventScript_Arthorios_ChooseMon
-	msgbox PalletTown_Text_ArthoriosGivePhone, MSGBOX_DEFAULT
-	giveitem ITEM_CONNECTOR
-	giveitem ITEM_TRAINER_AGENDA
-	setflag FLAG_GOT_PHONE_GEAR
+	setflag FLAG_MET_ARTHORIOS
 PalletTown_EventScript_Arthorios_ChooseMon::
 	msgbox PalletTown_Text_ArthoriosChoosePokemon, MSGBOX_DEFAULT
 	special ChooseKantoSpeciesFromList
@@ -407,7 +404,11 @@ PalletTown_EventScript_Arthorios_ChooseMon::
 	bufferspeciesname STR_VAR_1, VAR_TEMP_1
 	msgbox PalletTown_Text_ArthoriosConfirmGive, MSGBOX_YESNO
 	goto_if_eq VAR_RESULT, NO, PalletTown_EventScript_Arthorios_Cancel
-	givemon VAR_TEMP_1, 1
+	msgbox PalletTown_Text_ArthoriosAskShiny, MSGBOX_YESNO
+	copyvar VAR_TEMP_2, VAR_RESULT
+	copyvar VAR_0x8004, VAR_TEMP_1
+	copyvar VAR_0x8005, VAR_TEMP_2
+	special GiveChosenMonMaybeShiny
 	goto_if_eq VAR_RESULT, 0, PalletTown_EventScript_Arthorios_ReceivedParty
 	goto_if_eq VAR_RESULT, 1, PalletTown_EventScript_Arthorios_ReceivedPC
 	goto_if_eq VAR_RESULT, 2, EventScript_NoMoreRoomForPokemon
@@ -453,7 +454,61 @@ PalletTown_EventScript_Arthorios_EndGiveMon::
 	end
 
 PalletTown_EventScript_Gigi::
-	msgbox PalletTown_Text_Gigi, MSGBOX_NPC
+	lock
+	faceplayer
+	goto_if_set FLAG_GOT_PHONE_GEAR, PalletTown_EventScript_Gigi_AlreadyGave
+	msgbox PalletTown_Text_GigiGreeting, MSGBOX_DEFAULT
+	giveitem ITEM_CONNECTOR
+	giveitem ITEM_TRAINER_AGENDA
+	setflag FLAG_GOT_PHONE_GEAR
+	msgbox PalletTown_Text_GigiExplainGear, MSGBOX_DEFAULT
+	release
+	end
+
+PalletTown_EventScript_Gigi_AlreadyGave::
+	msgbox PalletTown_Text_GigiOfferCandy, MSGBOX_YESNO
+	goto_if_eq VAR_RESULT, NO, PalletTown_EventScript_Gigi_DeclineCandy
+	message PalletTown_Text_GigiHowManyCandy
+	waitmessage
+	multichoice 0, 0, MULTICHOICE_RARE_CANDY_QTY, FALSE
+	switch VAR_RESULT
+	case 0, PalletTown_EventScript_Gigi_GiveCandy1
+	case 1, PalletTown_EventScript_Gigi_GiveCandy5
+	case 2, PalletTown_EventScript_Gigi_GiveCandy10
+	case 3, PalletTown_EventScript_Gigi_GiveCandy30
+	case 4, PalletTown_EventScript_Gigi_GiveCandy50
+	case 5, PalletTown_EventScript_Gigi_GiveCandy99
+	case 6, PalletTown_EventScript_Gigi_DeclineCandy
+	case 127, PalletTown_EventScript_Gigi_DeclineCandy
+	end
+
+PalletTown_EventScript_Gigi_GiveCandy1::
+	setvar VAR_0x8001, 1
+	goto PalletTown_EventScript_Gigi_GiveCandy
+PalletTown_EventScript_Gigi_GiveCandy5::
+	setvar VAR_0x8001, 5
+	goto PalletTown_EventScript_Gigi_GiveCandy
+PalletTown_EventScript_Gigi_GiveCandy10::
+	setvar VAR_0x8001, 10
+	goto PalletTown_EventScript_Gigi_GiveCandy
+PalletTown_EventScript_Gigi_GiveCandy30::
+	setvar VAR_0x8001, 30
+	goto PalletTown_EventScript_Gigi_GiveCandy
+PalletTown_EventScript_Gigi_GiveCandy50::
+	setvar VAR_0x8001, 50
+	goto PalletTown_EventScript_Gigi_GiveCandy
+PalletTown_EventScript_Gigi_GiveCandy99::
+	setvar VAR_0x8001, 99
+	goto PalletTown_EventScript_Gigi_GiveCandy
+
+PalletTown_EventScript_Gigi_GiveCandy::
+	giveitem ITEM_RARE_CANDY, VAR_0x8001
+	release
+	end
+
+PalletTown_EventScript_Gigi_DeclineCandy::
+	msgbox PalletTown_Text_GigiAlreadyGave, MSGBOX_DEFAULT
+	release
 	end
 
 PalletTown_EventScript_GigiMew::
